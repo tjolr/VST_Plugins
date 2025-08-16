@@ -15,7 +15,7 @@ GuitarToBassAudioProcessorEditor::GuitarToBassAudioProcessorEditor (GuitarToBass
     : AudioProcessorEditor (&p), audioProcessor (p)
 {
     // Set up title label
-    titleLabel.setText("Guitar to Bass", juce::dontSendNotification);
+    titleLabel.setText("Guitar to Bass v3", juce::dontSendNotification);
     titleLabel.setFont(juce::FontOptions(24.0f, juce::Font::bold));
     titleLabel.setJustificationType(juce::Justification::centred);
     titleLabel.setColour(juce::Label::textColourId, juce::Colours::white);
