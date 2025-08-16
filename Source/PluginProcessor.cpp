@@ -17,20 +17,20 @@
 YINPitchDetector::YINPitchDetector(int bufferSize, float sampleRate)
     : bufferSize_(bufferSize), sampleRate_(sampleRate)
 {
-    differenceBuffer_.resize(bufferSize / 2);
-    cumulativeBuffer_.resize(bufferSize / 2);
+    differenceBuffer_.resize(static_cast<size_t>(bufferSize / 2));
+    cumulativeBuffer_.resize(static_cast<size_t>(bufferSize / 2));
     
     // Set up overlapping window analysis
-    analysisBuffer_.resize(bufferSize);
-    window_.resize(bufferSize);
+    analysisBuffer_.resize(static_cast<size_t>(bufferSize));
+    window_.resize(static_cast<size_t>(bufferSize));
     hopSize_ = static_cast<int>(bufferSize * (1.0f - overlapRatio_));
     generateWindow();
     
     // Set up FFT for polyphonic analysis
     fft_ = std::make_unique<juce::dsp::FFT>(fftOrder_);
     int fftSize = 1 << fftOrder_;
-    fftBuffer_.resize(fftSize * 2); // Complex numbers need 2x space
-    spectrum_.resize(fftSize / 2); // Only need positive frequencies
+    fftBuffer_.resize(static_cast<size_t>(fftSize * 2)); // Complex numbers need 2x space
+    spectrum_.resize(static_cast<size_t>(fftSize / 2)); // Only need positive frequencies
 }
 
 float YINPitchDetector::detectPitch(const float* audioBuffer, int numSamples)
@@ -54,10 +54,10 @@ float YINPitchDetector::detectPitch(const float* audioBuffer, int numSamples)
     else
     {
         // Fall back to YIN for monophonic detection
-        std::vector<float> windowedBuffer(bufferSize_);
+        std::vector<float> windowedBuffer(static_cast<size_t>(bufferSize_));
         for (int i = 0; i < bufferSize_; ++i)
         {
-            windowedBuffer[i] = analysisBuffer_[i] * window_[i];
+            windowedBuffer[static_cast<size_t>(i)] = analysisBuffer_[static_cast<size_t>(i)] * window_[static_cast<size_t>(i)];
         }
         
         calculateDifference(windowedBuffer.data(), bufferSize_);
@@ -106,7 +106,7 @@ void YINPitchDetector::calculateDifference(const float* audioBuffer, int numSamp
             float delta = audioBuffer[j] - audioBuffer[j + tau];
             sum += delta * delta;
         }
-        differenceBuffer_[tau] = sum;
+        differenceBuffer_[static_cast<size_t>(tau)] = sum;
     }
 }
 
@@ -117,8 +117,8 @@ void YINPitchDetector::calculateCumulativeMeanNormalizedDifference()
     
     for (int tau = 1; tau < static_cast<int>(differenceBuffer_.size()); ++tau)
     {
-        runningSum += differenceBuffer_[tau];
-        cumulativeBuffer_[tau] = differenceBuffer_[tau] / (runningSum / tau);
+        runningSum += differenceBuffer_[static_cast<size_t>(tau)];
+        cumulativeBuffer_[static_cast<size_t>(tau)] = differenceBuffer_[static_cast<size_t>(tau)] / (runningSum / tau);
     }
 }
 
@@ -127,11 +127,11 @@ int YINPitchDetector::getAbsoluteThreshold(float threshold)
     // Start from tau=2 to avoid the trivial minimum at tau=0
     for (int tau = 2; tau < static_cast<int>(cumulativeBuffer_.size()) - 1; ++tau)
     {
-        if (cumulativeBuffer_[tau] < threshold)
+        if (cumulativeBuffer_[static_cast<size_t>(tau)] < threshold)
         {
             // Look for local minimum
             while (tau + 1 < static_cast<int>(cumulativeBuffer_.size()) && 
-                   cumulativeBuffer_[tau + 1] < cumulativeBuffer_[tau])
+                   cumulativeBuffer_[static_cast<size_t>(tau + 1)] < cumulativeBuffer_[static_cast<size_t>(tau)])
             {
                 tau++;
             }
@@ -146,9 +146,9 @@ float YINPitchDetector::parabolicInterpolation(int peakIndex)
     if (peakIndex <= 0 || peakIndex >= static_cast<int>(cumulativeBuffer_.size()) - 1)
         return static_cast<float>(peakIndex);
         
-    float y1 = cumulativeBuffer_[peakIndex - 1];
-    float y2 = cumulativeBuffer_[peakIndex];
-    float y3 = cumulativeBuffer_[peakIndex + 1];
+    float y1 = cumulativeBuffer_[static_cast<size_t>(peakIndex - 1)];
+    float y2 = cumulativeBuffer_[static_cast<size_t>(peakIndex)];
+    float y3 = cumulativeBuffer_[static_cast<size_t>(peakIndex + 1)];
     
     float x0 = (y3 - y1) / (2.0f * (2.0f * y2 - y1 - y3));
     
@@ -159,7 +159,7 @@ void YINPitchDetector::processOverlappingWindow(const float* input, int numSampl
 {
     for (int i = 0; i < numSamples; ++i)
     {
-        analysisBuffer_[writeIndex_] = input[i];
+        analysisBuffer_[static_cast<size_t>(writeIndex_)] = input[i];
         writeIndex_++;
         
         // Check if we have a full buffer for analysis
@@ -171,7 +171,7 @@ void YINPitchDetector::processOverlappingWindow(const float* input, int numSampl
             // Shift buffer for overlap
             std::memmove(analysisBuffer_.data(), 
                         analysisBuffer_.data() + hopSize_, 
-                        (bufferSize_ - hopSize_) * sizeof(float));
+                        static_cast<size_t>(bufferSize_ - hopSize_) * sizeof(float));
             writeIndex_ = bufferSize_ - hopSize_;
         }
     }
@@ -183,7 +183,7 @@ void YINPitchDetector::generateWindow()
     for (int i = 0; i < bufferSize_; ++i)
     {
         float x = static_cast<float>(i) / (bufferSize_ - 1);
-        window_[i] = 0.5f * (1.0f - std::cos(2.0f * M_PI * x));
+        window_[static_cast<size_t>(i)] = 0.5f * (1.0f - std::cos(static_cast<float>(2.0f * M_PI * x)));
     }
 }
 
@@ -197,8 +197,8 @@ std::vector<float> YINPitchDetector::detectMultiplePitches(const float* buffer, 
     
     for (int i = 0; i < copySize; ++i)
     {
-        fftBuffer_[i * 2] = buffer[i] * window_[i]; // Real part
-        fftBuffer_[i * 2 + 1] = 0.0f; // Imaginary part
+        fftBuffer_[static_cast<size_t>(i * 2)] = buffer[i] * window_[static_cast<size_t>(i)]; // Real part
+        fftBuffer_[static_cast<size_t>(i * 2 + 1)] = 0.0f; // Imaginary part
     }
     
     // Perform FFT
@@ -207,9 +207,9 @@ std::vector<float> YINPitchDetector::detectMultiplePitches(const float* buffer, 
     // Calculate magnitude spectrum
     for (int i = 0; i < fftSize / 2; ++i)
     {
-        float real = fftBuffer_[i * 2];
-        float imag = fftBuffer_[i * 2 + 1];
-        spectrum_[i] = std::sqrt(real * real + imag * imag);
+        float real = fftBuffer_[static_cast<size_t>(i * 2)];
+        float imag = fftBuffer_[static_cast<size_t>(i * 2 + 1)];
+        spectrum_[static_cast<size_t>(i)] = std::sqrt(real * real + imag * imag);
     }
     
     // Find spectral peaks that correspond to musical pitches
@@ -232,12 +232,12 @@ std::vector<float> YINPitchDetector::findSpectralPeaks(const std::vector<float>&
             continue;
             
         // Check if this is a local maximum
-        if (spectrum[i] > spectrum[i-1] && spectrum[i] > spectrum[i+1] &&
-            spectrum[i] > spectrum[i-2] && spectrum[i] > spectrum[i+2])
+        if (spectrum[static_cast<size_t>(i)] > spectrum[static_cast<size_t>(i-1)] && spectrum[static_cast<size_t>(i)] > spectrum[static_cast<size_t>(i+1)] &&
+            spectrum[static_cast<size_t>(i)] > spectrum[static_cast<size_t>(i-2)] && spectrum[static_cast<size_t>(i)] > spectrum[static_cast<size_t>(i+2)])
         {
             // Require minimum amplitude threshold
             float maxSpectrum = *std::max_element(spectrum.begin(), spectrum.end());
-            if (spectrum[i] > maxSpectrum * 0.1f) // 10% of max
+            if (spectrum[static_cast<size_t>(i)] > maxSpectrum * 0.1f) // 10% of max
             {
                 pitches.push_back(frequency);
             }
@@ -319,9 +319,9 @@ void BassSynthesizer::renderBlock(float* output, int numSamples)
         }
         else
         {
-            analogPhase_ += phaseIncrement_ * 2.0f * M_PI;
-            if (analogPhase_ >= 2.0f * M_PI)
-                analogPhase_ -= 2.0f * M_PI;
+                    analogPhase_ += static_cast<float>(phaseIncrement_ * 2.0f * M_PI);
+        if (analogPhase_ >= 2.0f * M_PI)
+            analogPhase_ -= static_cast<float>(2.0f * M_PI);
         }
     }
 }
@@ -340,7 +340,7 @@ void BassSynthesizer::generateWavetable()
     for (int i = 0; i < wavetableSize_; ++i)
     {
         float x = static_cast<float>(i) / wavetableSize_;
-        float angle = 2.0f * M_PI * x;
+        float angle = static_cast<float>(2.0f * M_PI * x);
         
         // Fundamental + some harmonics for bass character
         float sample = std::sin(angle)                    // Fundamental
@@ -348,7 +348,7 @@ void BassSynthesizer::generateWavetable()
                      + 0.15f * std::sin(3.0f * angle)    // 3rd harmonic
                      + 0.1f * std::sin(4.0f * angle);    // 4th harmonic
         
-        wavetable_[i] = sample * 0.5f; // Scale down
+        wavetable_[static_cast<size_t>(i)] = sample * 0.5f; // Scale down
     }
 }
 
@@ -362,12 +362,12 @@ float BassSynthesizer::getNextSample()
         int index2 = (index1 + 1) % wavetableSize_;
         float frac = floatIndex - index1;
         
-        return wavetable_[index1] * (1.0f - frac) + wavetable_[index2] * frac;
+        return wavetable_[static_cast<size_t>(index1)] * (1.0f - frac) + wavetable_[static_cast<size_t>(index2)] * frac;
     }
     else
     {
         // Analog-style synthesis: sawtooth + lowpass filter
-        float sawtooth = (analogPhase_ / M_PI) - 1.0f; // -1 to 1 sawtooth
+        float sawtooth = static_cast<float>(analogPhase_ / M_PI) - 1.0f; // -1 to 1 sawtooth
         
         // Simple one-pole lowpass filter
         lowPassState_ += (sawtooth - lowPassState_) * filterCutoff_;
@@ -472,16 +472,16 @@ int GuitarToBassAudioProcessor::getCurrentProgram()
     return 0;
 }
 
-void GuitarToBassAudioProcessor::setCurrentProgram (int index)
+void GuitarToBassAudioProcessor::setCurrentProgram ([[maybe_unused]] int index)
 {
 }
 
-const juce::String GuitarToBassAudioProcessor::getProgramName (int index)
+const juce::String GuitarToBassAudioProcessor::getProgramName ([[maybe_unused]] int index)
 {
     return {};
 }
 
-void GuitarToBassAudioProcessor::changeProgramName (int index, const juce::String& newName)
+void GuitarToBassAudioProcessor::changeProgramName ([[maybe_unused]] int index, [[maybe_unused]] const juce::String& newName)
 {
 }
 
@@ -528,7 +528,7 @@ bool GuitarToBassAudioProcessor::isBusesLayoutSupported (const BusesLayout& layo
 }
 #endif
 
-void GuitarToBassAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
+void GuitarToBassAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, [[maybe_unused]] juce::MidiBuffer& midiMessages)
 {
     juce::ScopedNoDenormals noDenormals;
     auto totalNumInputChannels  = getTotalNumInputChannels();
