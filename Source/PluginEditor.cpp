@@ -78,6 +78,19 @@ GuitarToBassAudioProcessorEditor::GuitarToBassAudioProcessorEditor (GuitarToBass
     inputTestButton.setColour(juce::ToggleButton::tickColourId, juce::Colours::red);
     addAndMakeVisible(inputTestButton);
     
+    // Set up gate threshold slider
+    gateThresholdSlider.setSliderStyle(juce::Slider::LinearHorizontal);
+    gateThresholdSlider.setTextBoxStyle(juce::Slider::TextBoxRight, false, 60, 20);
+    gateThresholdSlider.setColour(juce::Slider::thumbColourId, juce::Colours::purple);
+    gateThresholdSlider.setColour(juce::Slider::trackColourId, juce::Colours::darkgrey);
+    addAndMakeVisible(gateThresholdSlider);
+    
+    gateThresholdLabel.setText("Gate Threshold", juce::dontSendNotification);
+    gateThresholdLabel.setFont(juce::FontOptions(14.0f));
+    gateThresholdLabel.setColour(juce::Label::textColourId, juce::Colours::white);
+    gateThresholdLabel.attachToComponent(&gateThresholdSlider, true);
+    addAndMakeVisible(gateThresholdLabel);
+    
     // Add button listener to test UI interaction
     inputTestButton.onClick = []() {
         debugLogEditor("=== TEST INPUT BUTTON CLICKED! ===");
@@ -169,6 +182,7 @@ GuitarToBassAudioProcessorEditor::GuitarToBassAudioProcessorEditor (GuitarToBass
     octaveAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(params, "octaveShift", octaveSlider);
     synthModeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(params, "synthMode", synthModeToggle);
     inputTestAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(params, "inputTest", inputTestButton);
+    gateThresholdAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(params, "gateThreshold", gateThresholdSlider);
     
     // Get parameter pointers for direct access
     inputTestParam_ = params.getRawParameterValue("inputTest");
@@ -178,7 +192,7 @@ GuitarToBassAudioProcessorEditor::GuitarToBassAudioProcessorEditor (GuitarToBass
     
     debugLogEditor("Editor setup complete");
     
-    setSize (600, 420); // Increased height for debug display
+    setSize (600, 520); // Increased height from 420 to 520 for better spacing
 }
 
 GuitarToBassAudioProcessorEditor::~GuitarToBassAudioProcessorEditor()
@@ -212,40 +226,46 @@ void GuitarToBassAudioProcessorEditor::resized()
     
     // Title at the top
     titleLabel.setBounds(bounds.removeFromTop(40));
-    bounds.removeFromTop(15);
+    bounds.removeFromTop(20); // Increased from 15 to 20
     
     // Pitch display
     pitchDisplayLabel.setBounds(bounds.removeFromTop(30));
-    bounds.removeFromTop(25);
+    bounds.removeFromTop(30); // Increased from 25 to 30
     
     // Debug log display
     debugLogLabel.setBounds(bounds.removeFromTop(30));
-    bounds.removeFromTop(15);
+    bounds.removeFromTop(20); // Increased from 15 to 20
     
     // Octave slider
     auto octaveArea = bounds.removeFromTop(30);
     octaveArea.removeFromLeft(100); // Space for label
     octaveSlider.setBounds(octaveArea);
-    bounds.removeFromTop(15);
+    bounds.removeFromTop(20); // Increased from 15 to 20
     
     // Synth mode toggle
     auto synthArea = bounds.removeFromTop(30);
     synthArea.removeFromLeft(100); // Space for label
     synthModeToggle.setBounds(synthArea.removeFromLeft(80));
-    bounds.removeFromTop(15);
+    bounds.removeFromTop(20); // Increased from 15 to 20
+    
+    // Gate threshold slider
+    auto gateArea = bounds.removeFromTop(30);
+    gateArea.removeFromLeft(100); // Space for label
+    gateThresholdSlider.setBounds(gateArea);
+    bounds.removeFromTop(20); // Increased from 15 to 20
     
     // Input test button
     auto testArea = bounds.removeFromTop(30);
     inputTestButton.setBounds(testArea.removeFromLeft(120));
-    bounds.removeFromTop(10);
+    bounds.removeFromTop(15); // Increased from 10 to 15
     
     // Enable live input button
     auto liveInputArea = bounds.removeFromTop(30);
     enableLiveInputButton.setBounds(liveInputArea.removeFromLeft(150));
-    bounds.removeFromTop(20);
+    bounds.removeFromTop(25); // Increased from 20 to 25
     
     // Level meters at the bottom - made larger and more prominent
-    auto meterArea = bounds.removeFromBottom(150);
+    auto meterArea = bounds.removeFromBottom(180); // Increased from 150 to 180 for better meter visibility
     
     // Input meter
     auto inputArea = meterArea.removeFromLeft(meterArea.getWidth() / 2 - 15);

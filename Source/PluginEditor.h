@@ -45,6 +45,8 @@ private:
     juce::Label debugLogLabel;
     juce::ToggleButton inputTestButton;
     juce::TextButton enableLiveInputButton;
+    juce::Slider gateThresholdSlider;
+    juce::Label gateThresholdLabel;
     
     // Level meters
     juce::Rectangle<float> inputMeterBounds;
@@ -58,6 +60,7 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> octaveAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> synthModeAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> inputTestAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> gateThresholdAttachment;
     
     // Parameter pointers for direct access
     std::atomic<float>* inputTestParam_ = nullptr;

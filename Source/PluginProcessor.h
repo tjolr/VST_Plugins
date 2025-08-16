@@ -168,11 +168,20 @@ private:
     juce::AudioBuffer<float> inputBuffer_;
     juce::AudioBuffer<float> outputBuffer_;
     
+    // Noise gate parameters
+    float gateThreshold_ = -50.0f; // dB threshold for noise gate
+    float gateRatio_ = 10.0f; // Gate ratio (how much to reduce below threshold)
+    float gateAttack_ = 0.01f; // Attack time in seconds
+    float gateRelease_ = 0.1f; // Release time in seconds
+    float gateLevel_ = 0.0f; // Current gate level (0.0 = closed, 1.0 = open)
+    float gateCoeff_ = 0.0f; // Gate coefficient for smoothing
+    
     // Parameter management
     juce::AudioProcessorValueTreeState parameters_;
     std::atomic<float>* octaveShiftParam_ = nullptr;
     std::atomic<float>* synthModeParam_ = nullptr;
     std::atomic<float>* inputTestParam_ = nullptr;
+    std::atomic<float>* gateThresholdParam_ = nullptr;
     
     juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
     

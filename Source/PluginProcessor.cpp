@@ -545,6 +545,14 @@ juce::AudioProcessorValueTreeState::ParameterLayout GuitarToBassAudioProcessor::
         juce::AudioParameterBoolAttributes().withStringFromValueFunction(
             [](bool value, int) { return value ? "ON" : "OFF"; })));
     
+    // Add noise gate threshold parameter
+    parameters.push_back(std::make_unique<juce::AudioParameterFloat>(
+        "gateThreshold",
+        "Gate Threshold", 
+        juce::NormalisableRange<float>(-80.0f, -20.0f, 1.0f), -50.0f,
+        juce::AudioParameterFloatAttributes().withLabel("dB").withStringFromValueFunction(
+            [](float value, int) { return juce::String(value, 0) + " dB"; })));
+    
     return { parameters.begin(), parameters.end() };
 }
 
@@ -567,6 +575,7 @@ GuitarToBassAudioProcessor::GuitarToBassAudioProcessor()
     octaveShiftParam_ = parameters_.getRawParameterValue("octaveShift");
     synthModeParam_ = parameters_.getRawParameterValue("synthMode");
     inputTestParam_ = parameters_.getRawParameterValue("inputTest");
+    gateThresholdParam_ = parameters_.getRawParameterValue("gateThreshold");
     
     debugLog("Parameter pointers obtained - OctaveShift: " + juce::String(octaveShiftParam_ ? "OK" : "NULL") + 
              ", SynthMode: " + juce::String(synthModeParam_ ? "OK" : "NULL"));
@@ -817,20 +826,39 @@ void GuitarToBassAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         inputLevel_.store(rawInputRMS); // Store raw input level for visualization
         
         // Apply input gain to boost quiet signals for pitch detection
-        const float inputGain = 10.0f; // Boost by 20dB (10x)
-        std::vector<float> boostedInput(static_cast<size_t>(numSamples));
-        for (int i = 0; i < numSamples; ++i)
-        {
-            boostedInput[static_cast<size_t>(i)] = inputData[i] * inputGain;
-        }
-        
-        // Calculate boosted input level for pitch detection
+        float inputGain = 10.0f; // 20dB boost
         float boostedInputRMS = 0.0f;
-        float maxBoostedInputSample = 0.0f;
+        float maxBoostedSample = 0.0f;
+        
+        // Apply noise gate to prevent background noise from causing unwanted output
+        float gateThreshold = gateThresholdParam_ ? gateThresholdParam_->load() : -50.0f;
+        float gateThresholdLinear = std::pow(10.0f, gateThreshold / 20.0f);
+        
+        // Calculate gate coefficients for attack and release
+        float gateAttackCoeff = gateAttack_ > 0.0f ? std::exp(-1.0f / (getSampleRate() * gateAttack_)) : 0.0f;
+        float gateReleaseCoeff = gateRelease_ > 0.0f ? std::exp(-1.0f / (getSampleRate() * gateRelease_)) : 0.0f;
+        
+        // Apply noise gate and gain to input signal
+        std::vector<float> gatedInput(static_cast<size_t>(numSamples));
         for (int i = 0; i < numSamples; ++i)
         {
-            boostedInputRMS += boostedInput[static_cast<size_t>(i)] * boostedInput[static_cast<size_t>(i)];
-            maxBoostedInputSample = std::max(maxBoostedInputSample, std::abs(boostedInput[static_cast<size_t>(i)]));
+            float boostedSample = inputData[i] * inputGain;
+            
+            // Calculate gate level based on input amplitude
+            float inputAmplitude = std::abs(boostedSample);
+            float targetGateLevel = inputAmplitude > gateThresholdLinear ? 1.0f : 0.0f;
+            
+            // Smooth gate level with attack/release
+            if (targetGateLevel > gateLevel_)
+                gateLevel_ = gateLevel_ + (1.0f - gateAttackCoeff) * (targetGateLevel - gateLevel_);
+            else
+                gateLevel_ = gateLevel_ + (1.0f - gateReleaseCoeff) * (targetGateLevel - gateLevel_);
+            
+            // Apply gate to boosted sample
+            gatedInput[static_cast<size_t>(i)] = boostedSample * gateLevel_;
+            
+            boostedInputRMS += gatedInput[static_cast<size_t>(i)] * gatedInput[static_cast<size_t>(i)];
+            maxBoostedSample = std::max(maxBoostedSample, std::abs(gatedInput[static_cast<size_t>(i)]));
         }
         boostedInputRMS = std::sqrt(boostedInputRMS / numSamples);
         
@@ -839,40 +867,48 @@ void GuitarToBassAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         {
             float rawInputDB = 20.0f * std::log10(rawInputRMS + 1e-10f);
             float boostedInputDB = 20.0f * std::log10(boostedInputRMS + 1e-10f);
+            float gateLevelDB = 20.0f * std::log10(gateLevel_ + 1e-10f);
             debugLog("=== INPUT LEVEL DEBUG ===");
             debugLog("Raw Input RMS: " + juce::String(rawInputRMS, 6));
             debugLog("Raw Input MaxSample: " + juce::String(maxRawInputSample, 6));
             debugLog("Raw Input dB: " + juce::String(rawInputDB, 1) + " dB");
             debugLog("Boosted Input RMS: " + juce::String(boostedInputRMS, 6));
             debugLog("Boosted Input dB: " + juce::String(boostedInputDB, 1) + " dB");
-            debugLog("Has Audio (Raw): " + juce::String(rawInputRMS > 0.0001f ? "YES" : "NO"));
-            debugLog("Input Gain Applied: 20dB (10x)");
-            debugLog("Processing Mode: " + juce::String(inputTestEnabled ? "TEST INPUT" : "LIVE INPUT"));
+            debugLog("Gate Threshold: " + juce::String(gateThreshold, 1) + " dB");
+            debugLog("Gate Level: " + juce::String(gateLevel_, 3) + " (" + juce::String(gateLevelDB, 1) + " dB)");
+            debugLog("Has Audio (Raw): " + juce::String(rawInputRMS > 0.001f ? "YES" : "NO"));
+            debugLog("Has Audio (Gated): " + juce::String(boostedInputRMS > 0.001f ? "YES" : "NO"));
         }
         
-        // Detect pitch using YIN algorithm with real-time fallback
-        if (processCounter % 100 == 0) // More frequent logging
+        // Only perform pitch detection if we have significant gated input
+        bool hasSignificantInput = boostedInputRMS > 0.001f;
+        if (!hasSignificantInput)
         {
-            debugLog("=== PITCH DETECTION CALL ===");
-            debugLog("Calling pitch detection with input RMS: " + juce::String(boostedInputRMS, 6));
-            debugLog("Boosted input samples: " + juce::String(numSamples));
-            debugLog("Input Source: " + juce::String(inputTestEnabled ? "Test Tone (330Hz)" : "Live Audio"));
+            // No significant input - clear pitch and output
+            currentPitch_ = 0.0f;
+            bassSynthesizer_->setAmplitude(0.0f);
+            bassSynthesizer_->reset();
+            
+            // Debug: Log when input is too quiet
+            if (processCounter % 1000 == 0) // Less frequent for quiet periods
+            {
+                debugLog("=== NO SIGNIFICANT INPUT - GATE CLOSED ===");
+                debugLog("Input too quiet for pitch detection - gate threshold: " + juce::String(gateThreshold, 1) + " dB");
+            }
+            return;
         }
         
+        // Perform pitch detection on gated input
         float detectedPitch = 0.0f;
-        
-        // Try YIN detection first - process both test input and live input the same way
-        if (boostedInputRMS > 0.001f) // Only if we have significant audio
+        if (pitchDetector_)
         {
-            detectedPitch = pitchDetector_->detectPitch(boostedInput.data(), numSamples);
+            detectedPitch = pitchDetector_->detectPitch(gatedInput.data(), numSamples);
         }
         
-        // Real-time fallback: simple zero-crossing detection for immediate response
-        if (detectedPitch <= 0.0f && boostedInputRMS > 0.01f) // If YIN fails but we have good audio
+        // Fallback to simple pitch detection if YIN fails
+        if (detectedPitch <= 0.0f)
         {
-            detectedPitch = detectPitchSimple(boostedInput.data(), numSamples, getSampleRate());
-            if (processCounter % 100 == 0)
-                debugLog("Using simple pitch detection fallback: " + juce::String(detectedPitch, 1) + " Hz");
+            detectedPitch = detectPitchSimple(gatedInput.data(), numSamples, getSampleRate());
         }
         
         // Update current pitch (with basic smoothing)
