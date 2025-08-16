@@ -20,7 +20,7 @@ static void debugLogEditor(const juce::String& message)
 GuitarToBassAudioProcessorEditor::GuitarToBassAudioProcessorEditor (GuitarToBassAudioProcessor& p)
     : AudioProcessorEditor (&p), audioProcessor (p)
 {
-    debugLogEditor("Editor constructor called");
+    debugLogEditor("PluginEditor constructor called");
     
     // Set up title label
     titleLabel.setText("Guitar to Bass v3", juce::dontSendNotification);
@@ -79,15 +79,63 @@ GuitarToBassAudioProcessorEditor::GuitarToBassAudioProcessorEditor (GuitarToBass
     addAndMakeVisible(inputTestButton);
     
     // Add button listener to test UI interaction
-    inputTestButton.onClick = [this]() {
+    inputTestButton.onClick = []() {
         debugLogEditor("=== TEST INPUT BUTTON CLICKED! ===");
         debugLogEditor("UI interaction is working - looking for audio engine controls...");
         
         // Show a popup to confirm the button click
         juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::InfoIcon,
-                                              "Button Test",
-                                              "Test Input button was clicked!\n\nNow look for the 'Options' button to start the audio engine.",
-                                              "OK");
+                                               "Button Test",
+                                               "Test Input button was clicked!\n\nNow look for the 'Options' button to start the audio engine.",
+                                               "OK");
+    };
+    
+    // Add a helpful button to enable live input
+    enableLiveInputButton.setButtonText("Enable Live Input");
+    enableLiveInputButton.setColour(juce::TextButton::buttonColourId, juce::Colours::blue);
+    enableLiveInputButton.setColour(juce::TextButton::textColourOffId, juce::Colours::white);
+    addAndMakeVisible(enableLiveInputButton);
+    
+    enableLiveInputButton.onClick = []() {
+        debugLogEditor("=== LIVE INPUT ENABLE INSTRUCTIONS ===");
+        
+        juce::String instructions = "To enable live input:\n\n";
+        instructions += "1. Click the 'Settings...' button in the yellow banner\n";
+        instructions += "2. In the Audio/MIDI Settings dialog:\n";
+        instructions += "   - Uncheck 'Mute audio input'\n";
+        instructions += "   - Select your input device\n";
+        instructions += "   - Select your output device\n";
+        instructions += "3. Click OK to apply settings\n\n";
+        instructions += "This will allow your guitar/microphone to be processed in real-time!";
+        
+        juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::InfoIcon,
+                                               "Enable Live Input",
+                                               instructions,
+                                               "OK");
+    };
+    
+    // Add a manual audio engine start button
+    auto* startAudioButton = new juce::TextButton("Start Audio Engine");
+    startAudioButton->setButtonText("Start Audio Engine");
+    startAudioButton->setColour(juce::TextButton::buttonColourId, juce::Colours::green);
+    startAudioButton->setColour(juce::TextButton::textColourOffId, juce::Colours::white);
+    addAndMakeVisible(startAudioButton);
+    
+    startAudioButton->onClick = [this]() {
+        debugLogEditor("=== MANUAL AUDIO ENGINE START REQUESTED ===");
+        debugLogEditor("Attempting to force audio engine start...");
+        
+        // Try to trigger audio processing by enabling test input
+        if (inputTestParam_)
+        {
+            debugLogEditor("Enabling test input to trigger audio processing...");
+            inputTestParam_->store(1.0f);
+        }
+        
+        juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::InfoIcon,
+                                               "Audio Engine Start",
+                                               "Audio engine start requested.\n\nCheck console for debug logs.",
+                                               "OK");
     };
     
     // Set up level meter labels with enhanced styling
@@ -122,8 +170,11 @@ GuitarToBassAudioProcessorEditor::GuitarToBassAudioProcessorEditor (GuitarToBass
     synthModeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(params, "synthMode", synthModeToggle);
     inputTestAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(params, "inputTest", inputTestButton);
     
+    // Get parameter pointers for direct access
+    inputTestParam_ = params.getRawParameterValue("inputTest");
+    
     // Start timer for pitch display updates
-    startTimerHz(30);
+    startTimerHz(60); // Increased from 30Hz to 60Hz for smoother level meter updates
     
     debugLogEditor("Editor setup complete");
     
@@ -186,6 +237,11 @@ void GuitarToBassAudioProcessorEditor::resized()
     // Input test button
     auto testArea = bounds.removeFromTop(30);
     inputTestButton.setBounds(testArea.removeFromLeft(120));
+    bounds.removeFromTop(10);
+    
+    // Enable live input button
+    auto liveInputArea = bounds.removeFromTop(30);
+    enableLiveInputButton.setBounds(liveInputArea.removeFromLeft(150));
     bounds.removeFromTop(20);
     
     // Level meters at the bottom - made larger and more prominent
@@ -239,7 +295,7 @@ void GuitarToBassAudioProcessorEditor::timerCallback()
     
     // Update debug display with comprehensive information
     static int debugCounter = 0;
-    if (++debugCounter % 30 == 0) // Update debug display every second (30 Hz timer)
+    if (++debugCounter % 60 == 0) // Update debug display every second (60 Hz timer)
     {
         juce::String debugInfo = "Input: " + juce::String(inputDb, 1) + " dB";
         debugInfo += " | Output: " + juce::String(outputDb, 1) + " dB";
@@ -262,6 +318,14 @@ void GuitarToBassAudioProcessorEditor::timerCallback()
                        "Output: " + juce::String(outputDb, 1) + " dB (" + 
                        juce::String(hasOutputAudio ? "ACTIVE" : "SILENT") + "), " +
                        "Pitch: " + (currentPitch > 0.0f ? juce::String(currentPitch, 1) + " Hz" : "None"));
+        
+        // Debug: Check if input level is changing
+        static float lastInputLevel = 0.0f;
+        if (std::abs(inputLevel - lastInputLevel) > 0.0001f)
+        {
+            debugLogEditor("INPUT LEVEL CHANGED: " + juce::String(lastInputLevel, 6) + " -> " + juce::String(inputLevel, 6));
+            lastInputLevel = inputLevel;
+        }
     }
     
     // Trigger repaint for level meters

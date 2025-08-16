@@ -100,6 +100,10 @@ private:
 };
 
 //==============================================================================
+// Simple real-time pitch detection fallback
+float detectPitchSimple(const float* audioBuffer, int numSamples, double sampleRate);
+
+//==============================================================================
 /**
 */
 class GuitarToBassAudioProcessor  : public juce::AudioProcessor
@@ -157,6 +161,12 @@ private:
     // Level monitoring
     std::atomic<float> inputLevel_{0.0f};
     std::atomic<float> outputLevel_{0.0f};
+    
+    // Audio engine state
+    double currentSampleRate_ = 44100.0;
+    int currentBlockSize_ = 512;
+    juce::AudioBuffer<float> inputBuffer_;
+    juce::AudioBuffer<float> outputBuffer_;
     
     // Parameter management
     juce::AudioProcessorValueTreeState parameters_;

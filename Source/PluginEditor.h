@@ -44,6 +44,7 @@ private:
     juce::Label pitchDisplayLabel;
     juce::Label debugLogLabel;
     juce::ToggleButton inputTestButton;
+    juce::TextButton enableLiveInputButton;
     
     // Level meters
     juce::Rectangle<float> inputMeterBounds;
@@ -57,6 +58,9 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> octaveAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> synthModeAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> inputTestAttachment;
+    
+    // Parameter pointers for direct access
+    std::atomic<float>* inputTestParam_ = nullptr;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (GuitarToBassAudioProcessorEditor)
 };

@@ -395,6 +395,16 @@ void BassSynthesizer::renderBlock(float* output, int numSamples)
                  ", SynthMode: " + juce::String(synthMode_ ? "Wavetable" : "Analog"));
     }
     
+    // If amplitude is 0, output silence
+    if (amplitude_ <= 0.0f)
+    {
+        for (int i = 0; i < numSamples; ++i)
+        {
+            output[i] = 0.0f;
+        }
+        return;
+    }
+    
     for (int i = 0; i < numSamples; ++i)
     {
         // Update envelope
@@ -473,6 +483,39 @@ float BassSynthesizer::getNextSample()
 }
 
 //==============================================================================
+// Simple real-time pitch detection using zero-crossing analysis
+float detectPitchSimple(const float* audioBuffer, int numSamples, double sampleRate)
+{
+    if (audioBuffer == nullptr || numSamples < 64)
+        return 0.0f;
+    
+    // Count zero crossings
+    int zeroCrossings = 0;
+    for (int i = 1; i < numSamples; ++i)
+    {
+        if ((audioBuffer[i-1] < 0.0f && audioBuffer[i] >= 0.0f) ||
+            (audioBuffer[i-1] > 0.0f && audioBuffer[i] <= 0.0f))
+        {
+            zeroCrossings++;
+        }
+    }
+    
+    // Calculate frequency from zero crossings
+    if (zeroCrossings > 0)
+    {
+        float frequency = (static_cast<float>(sampleRate) * zeroCrossings) / (2.0f * numSamples);
+        
+        // Filter to guitar range (80-400 Hz)
+        if (frequency >= 80.0f && frequency <= 400.0f)
+        {
+            return frequency;
+        }
+    }
+    
+    return 0.0f;
+}
+
+//==============================================================================
 juce::AudioProcessorValueTreeState::ParameterLayout GuitarToBassAudioProcessor::createParameterLayout()
 {
     std::vector<std::unique_ptr<juce::RangedAudioParameter>> parameters;
@@ -527,6 +570,15 @@ GuitarToBassAudioProcessor::GuitarToBassAudioProcessor()
     
     debugLog("Parameter pointers obtained - OctaveShift: " + juce::String(octaveShiftParam_ ? "OK" : "NULL") + 
              ", SynthMode: " + juce::String(synthModeParam_ ? "OK" : "NULL"));
+    
+    // Debug: Check audio bus configuration
+    debugLog("Audio Bus Configuration:");
+    debugLog("  Input Buses: " + juce::String(getBusCount(true)));
+    debugLog("  Output Buses: " + juce::String(getBusCount(false)));
+    debugLog("  Main Input Channels: " + juce::String(getMainBusNumInputChannels()));
+    debugLog("  Main Output Channels: " + juce::String(getMainBusNumOutputChannels()));
+    debugLog("  Total Input Channels: " + juce::String(getTotalNumInputChannels()));
+    debugLog("  Total Output Channels: " + juce::String(getTotalNumOutputChannels()));
     
     debugLog("GuitarToBassAudioProcessor initialization complete");
     debugLog("=== PLUGIN LOADED - LOOKING FOR AUDIO ENGINE START ===");
@@ -601,19 +653,30 @@ void GuitarToBassAudioProcessor::changeProgramName ([[maybe_unused]] int index, 
 //==============================================================================
 void GuitarToBassAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
+    debugLog("=== AUDIO ENGINE INITIALIZATION ===");
     debugLog("prepareToPlay called - SampleRate: " + juce::String(sampleRate) + 
              ", SamplesPerBlock: " + juce::String(samplesPerBlock));
     
-    // Initialize YIN pitch detector with appropriate buffer size
-    int pitchAnalysisSize = std::max(1024, samplesPerBlock * 2);
-    debugLog("Creating YINPitchDetector with analysis size: " + juce::String(pitchAnalysisSize));
-    pitchDetector_ = std::make_unique<YINPitchDetector>(pitchAnalysisSize, static_cast<float>(sampleRate));
+    // Store sample rate and block size for later use
+    currentSampleRate_ = sampleRate;
+    currentBlockSize_ = samplesPerBlock;
+    
+    // Initialize pitch detector with optimized settings for real-time processing
+    int pitchAnalysisSize = std::min(512, samplesPerBlock * 2); // Smaller buffer for real-time
+    debugLog("Initializing YIN pitch detector with analysis size: " + juce::String(pitchAnalysisSize));
+    
+    pitchDetector_ = std::make_unique<YINPitchDetector>(pitchAnalysisSize, sampleRate);
     
     // Initialize bass synthesizer
-    debugLog("Creating BassSynthesizer with sample rate: " + juce::String(sampleRate));
-    bassSynthesizer_ = std::make_unique<BassSynthesizer>(static_cast<float>(sampleRate));
+    debugLog("Initializing bass synthesizer");
+    bassSynthesizer_ = std::make_unique<BassSynthesizer>(sampleRate);
     
-    debugLog("prepareToPlay completed successfully");
+    // Initialize audio buffers
+    inputBuffer_.setSize(1, samplesPerBlock);
+    outputBuffer_.setSize(1, samplesPerBlock);
+    
+    debugLog("Audio engine initialization complete");
+    debugLog("=== READY FOR AUDIO PROCESSING ===");
 }
 
 void GuitarToBassAudioProcessor::releaseResources()
@@ -654,11 +717,24 @@ void GuitarToBassAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     auto totalNumInputChannels  = getTotalNumInputChannels();
     auto totalNumOutputChannels = getTotalNumOutputChannels();
 
-    // Debug: Log buffer info periodically
+    // Debug: Log every process block to confirm it's running
     static int processCounter = 0;
-    if (++processCounter % 100 == 0) // Log every 100th process block (more frequent)
+    static bool firstCall = true;
+    
+    if (firstCall)
     {
-        debugLog("ProcessBlock #" + juce::String(processCounter) + " - InputChannels: " + juce::String(totalNumInputChannels) + 
+        debugLog("=== FIRST PROCESS BLOCK CALLED - AUDIO ENGINE IS RUNNING! ===");
+        debugLog("Sample Rate: " + juce::String(getSampleRate()) + " Hz");
+        debugLog("Block Size: " + juce::String(getBlockSize()) + " samples");
+        debugLog("Input Channels: " + juce::String(totalNumInputChannels));
+        debugLog("Output Channels: " + juce::String(totalNumOutputChannels));
+        firstCall = false;
+    }
+    
+    if (++processCounter % 50 == 0) // Log every 50th process block (more frequent)
+    {
+        debugLog("=== PROCESS BLOCK #" + juce::String(processCounter) + " ===");
+        debugLog("InputChannels: " + juce::String(totalNumInputChannels) + 
                  ", OutputChannels: " + juce::String(totalNumOutputChannels) + 
                  ", NumSamples: " + juce::String(buffer.getNumSamples()) + 
                  ", SampleRate: " + juce::String(getSampleRate()));
@@ -708,7 +784,39 @@ void GuitarToBassAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
             return;
         }
         
-        // Apply input gain to boost quiet signals
+        // Check if input data has any non-zero values (for debugging)
+        bool hasNonZeroInput = false;
+        float maxInputValue = 0.0f;
+        for (int i = 0; i < numSamples; ++i)
+        {
+            if (std::abs(inputData[i]) > 1e-10f)
+            {
+                hasNonZeroInput = true;
+                maxInputValue = std::max(maxInputValue, std::abs(inputData[i]));
+            }
+        }
+        
+        if (processCounter % 100 == 0) // Log every 100th process block
+        {
+            debugLog("=== INPUT DATA CHECK ===");
+            debugLog("Has Non-Zero Input: " + juce::String(hasNonZeroInput ? "YES" : "NO"));
+            debugLog("Max Input Value: " + juce::String(maxInputValue, 8));
+            debugLog("Input Test Enabled: " + juce::String(inputTestEnabled ? "YES" : "NO"));
+            debugLog("Processing Live Input: " + juce::String(!inputTestEnabled ? "YES" : "NO"));
+        }
+        
+        // Calculate input level (RMS) from raw input for visualization
+        float rawInputRMS = 0.0f;
+        float maxRawInputSample = 0.0f;
+        for (int i = 0; i < numSamples; ++i)
+        {
+            rawInputRMS += inputData[i] * inputData[i];
+            maxRawInputSample = std::max(maxRawInputSample, std::abs(inputData[i]));
+        }
+        rawInputRMS = std::sqrt(rawInputRMS / numSamples);
+        inputLevel_.store(rawInputRMS); // Store raw input level for visualization
+        
+        // Apply input gain to boost quiet signals for pitch detection
         const float inputGain = 10.0f; // Boost by 20dB (10x)
         std::vector<float> boostedInput(static_cast<size_t>(numSamples));
         for (int i = 0; i < numSamples; ++i)
@@ -716,32 +824,56 @@ void GuitarToBassAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
             boostedInput[static_cast<size_t>(i)] = inputData[i] * inputGain;
         }
         
-        // Calculate input level (RMS) and check for audio activity
-        float inputRMS = 0.0f;
-        float maxInputSample = 0.0f;
+        // Calculate boosted input level for pitch detection
+        float boostedInputRMS = 0.0f;
+        float maxBoostedInputSample = 0.0f;
         for (int i = 0; i < numSamples; ++i)
         {
-            inputRMS += boostedInput[static_cast<size_t>(i)] * boostedInput[static_cast<size_t>(i)];
-            maxInputSample = std::max(maxInputSample, std::abs(boostedInput[static_cast<size_t>(i)]));
+            boostedInputRMS += boostedInput[static_cast<size_t>(i)] * boostedInput[static_cast<size_t>(i)];
+            maxBoostedInputSample = std::max(maxBoostedInputSample, std::abs(boostedInput[static_cast<size_t>(i)]));
         }
-        inputRMS = std::sqrt(inputRMS / numSamples);
-        inputLevel_.store(inputRMS);
+        boostedInputRMS = std::sqrt(boostedInputRMS / numSamples);
         
         // Debug: Log input levels periodically
-        if (processCounter % 1000 == 0)
+        if (processCounter % 100 == 0) // More frequent logging
         {
-            debugLog("Input levels - RMS: " + juce::String(inputRMS, 6) + 
-                     ", MaxSample: " + juce::String(maxInputSample, 6) + 
-                     ", HasAudio: " + juce::String(inputRMS > 0.0001f ? "YES" : "NO") + // Lowered threshold
-                     ", dB: " + juce::String(20.0f * std::log10(inputRMS + 1e-10f), 1));
+            float rawInputDB = 20.0f * std::log10(rawInputRMS + 1e-10f);
+            float boostedInputDB = 20.0f * std::log10(boostedInputRMS + 1e-10f);
+            debugLog("=== INPUT LEVEL DEBUG ===");
+            debugLog("Raw Input RMS: " + juce::String(rawInputRMS, 6));
+            debugLog("Raw Input MaxSample: " + juce::String(maxRawInputSample, 6));
+            debugLog("Raw Input dB: " + juce::String(rawInputDB, 1) + " dB");
+            debugLog("Boosted Input RMS: " + juce::String(boostedInputRMS, 6));
+            debugLog("Boosted Input dB: " + juce::String(boostedInputDB, 1) + " dB");
+            debugLog("Has Audio (Raw): " + juce::String(rawInputRMS > 0.0001f ? "YES" : "NO"));
+            debugLog("Input Gain Applied: 20dB (10x)");
+            debugLog("Processing Mode: " + juce::String(inputTestEnabled ? "TEST INPUT" : "LIVE INPUT"));
         }
         
-        // Detect pitch using YIN algorithm
-        if (processCounter % 1000 == 0)
+        // Detect pitch using YIN algorithm with real-time fallback
+        if (processCounter % 100 == 0) // More frequent logging
         {
-            debugLog("Calling pitch detection with input RMS: " + juce::String(inputRMS, 6));
+            debugLog("=== PITCH DETECTION CALL ===");
+            debugLog("Calling pitch detection with input RMS: " + juce::String(boostedInputRMS, 6));
+            debugLog("Boosted input samples: " + juce::String(numSamples));
+            debugLog("Input Source: " + juce::String(inputTestEnabled ? "Test Tone (330Hz)" : "Live Audio"));
         }
-        float detectedPitch = pitchDetector_->detectPitch(boostedInput.data(), numSamples);
+        
+        float detectedPitch = 0.0f;
+        
+        // Try YIN detection first - process both test input and live input the same way
+        if (boostedInputRMS > 0.001f) // Only if we have significant audio
+        {
+            detectedPitch = pitchDetector_->detectPitch(boostedInput.data(), numSamples);
+        }
+        
+        // Real-time fallback: simple zero-crossing detection for immediate response
+        if (detectedPitch <= 0.0f && boostedInputRMS > 0.01f) // If YIN fails but we have good audio
+        {
+            detectedPitch = detectPitchSimple(boostedInput.data(), numSamples, getSampleRate());
+            if (processCounter % 100 == 0)
+                debugLog("Using simple pitch detection fallback: " + juce::String(detectedPitch, 1) + " Hz");
+        }
         
         // Update current pitch (with basic smoothing)
         if (detectedPitch > 0.0f)
@@ -757,18 +889,40 @@ void GuitarToBassAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         bool synthMode = synthModeParam_ ? synthModeParam_->load() > 0.5f : true;
         
         // Debug: Log synthesis parameters periodically
-        if (processCounter % 1000 == 0)
+        if (processCounter % 100 == 0) // More frequent logging
         {
-            debugLog("Synthesis - DetectedPitch: " + juce::String(detectedPitch, 1) + 
-                     ", CurrentPitch: " + juce::String(currentPitch_, 1) + 
-                     ", TargetPitch: " + juce::String(targetPitch, 1) + 
-                     ", OctaveShift: " + juce::String(octaveShift, 1) + 
-                     ", SynthMode: " + juce::String(synthMode ? "Synth" : "Analog"));
+            debugLog("=== SYNTHESIS DEBUG ===");
+            debugLog("Detected Pitch: " + juce::String(detectedPitch, 1) + " Hz");
+            debugLog("Current Pitch: " + juce::String(currentPitch_, 1) + " Hz");
+            debugLog("Target Pitch: " + juce::String(targetPitch, 1) + " Hz");
+            debugLog("Octave Shift: " + juce::String(octaveShift, 1) + " octaves");
+            debugLog("Synth Mode: " + juce::String(synthMode ? "Synth" : "Analog"));
+            debugLog("Input Source: " + juce::String(inputTestEnabled ? "Test Tone" : "Live Audio"));
         }
         
         // Configure bass synthesizer
         bassSynthesizer_->setFrequency(targetPitch);
-        bassSynthesizer_->setAmplitude(currentPitch_ > 0.0f ? 0.3f : 0.0f);
+        
+        // Only produce output if we have detected pitch and input audio
+        bool hasInputAudio = boostedInputRMS > 0.001f;
+        bool hasValidPitch = currentPitch_ > 0.0f;
+        
+        if (hasInputAudio && hasValidPitch)
+        {
+            bassSynthesizer_->setAmplitude(0.3f);
+        }
+        else
+        {
+            // No output when no input or no pitch detected
+            bassSynthesizer_->setAmplitude(0.0f);
+            
+            // Reset synthesizer when no input to ensure clean state
+            if (!hasInputAudio)
+            {
+                bassSynthesizer_->reset();
+            }
+        }
+        
         bassSynthesizer_->setSynthMode(synthMode);
         
         // Generate bass output
@@ -800,10 +954,14 @@ void GuitarToBassAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
                 outputLevel_.store(outputRMS);
                 
                 // Debug: Log output levels periodically
-                if (processCounter % 1000 == 0)
+                if (processCounter % 100 == 0) // More frequent logging
                 {
-                    debugLog("Output levels - RMS: " + juce::String(outputRMS, 6) + 
-                             ", MaxSample: " + juce::String(maxOutputSample, 6));
+                    float outputDB = 20.0f * std::log10(outputRMS + 1e-10f);
+                    debugLog("=== OUTPUT LEVEL DEBUG ===");
+                    debugLog("Output RMS: " + juce::String(outputRMS, 6));
+                    debugLog("Output MaxSample: " + juce::String(maxOutputSample, 6));
+                    debugLog("Output dB: " + juce::String(outputDB, 1) + " dB");
+                    debugLog("Input Source: " + juce::String(inputTestEnabled ? "Test Tone" : "Live Audio"));
                 }
             }
         }
