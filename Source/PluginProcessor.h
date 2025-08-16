@@ -10,6 +10,29 @@
 
 #include <juce_audio_processors/juce_audio_processors.h>
 #include <juce_dsp/juce_dsp.h>
+#include <vector>
+
+//==============================================================================
+// YIN Algorithm for pitch detection
+class YINPitchDetector
+{
+public:
+    YINPitchDetector(int bufferSize, float sampleRate);
+    float detectPitch(const float* audioBuffer, int numSamples);
+    
+private:
+    void calculateDifference(const float* audioBuffer, int numSamples);
+    void calculateCumulativeMeanNormalizedDifference();
+    int getAbsoluteThreshold(float threshold = 0.1f);
+    float parabolicInterpolation(int peakIndex);
+    
+    std::vector<float> differenceBuffer_;
+    std::vector<float> cumulativeBuffer_;
+    int bufferSize_;
+    float sampleRate_;
+    static constexpr float minFreq_ = 80.0f;  // Low E string
+    static constexpr float maxFreq_ = 400.0f; // Upper guitar range
+};
 
 //==============================================================================
 /**
@@ -53,8 +76,22 @@ public:
     //==============================================================================
     void getStateInformation (juce::MemoryBlock& destData) override;
     void setStateInformation (const void* data, int sizeInBytes) override;
+    
+    //==============================================================================
+    juce::AudioProcessorValueTreeState& getParameters() { return parameters_; }
+    float getCurrentPitch() const { return currentPitch_; }
 
 private:
     //==============================================================================
+    std::unique_ptr<YINPitchDetector> pitchDetector_;
+    float currentPitch_ = 0.0f;
+    
+    // Parameter management
+    juce::AudioProcessorValueTreeState parameters_;
+    std::atomic<float>* octaveShiftParam_ = nullptr;
+    std::atomic<float>* synthModeParam_ = nullptr;
+    
+    juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
+    
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (GuitarToBassAudioProcessor)
 };

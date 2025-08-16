@@ -15,7 +15,7 @@
 //==============================================================================
 /**
 */
-class GuitarToBassAudioProcessorEditor  : public juce::AudioProcessorEditor
+class GuitarToBassAudioProcessorEditor  : public juce::AudioProcessorEditor, private juce::Timer
 {
 public:
     GuitarToBassAudioProcessorEditor (GuitarToBassAudioProcessor&);
@@ -24,11 +24,25 @@ public:
     //==============================================================================
     void paint (juce::Graphics&) override;
     void resized() override;
+    
+    void timerCallback() override;
 
 private:
     // This reference is provided as a quick way for your editor to
     // access the processor object that created it.
     GuitarToBassAudioProcessor& audioProcessor;
+    
+    // UI Components
+    juce::Slider octaveSlider;
+    juce::Label octaveLabel;
+    juce::ToggleButton synthModeToggle;
+    juce::Label synthModeLabel;
+    juce::Label titleLabel;
+    juce::Label pitchDisplayLabel;
+    
+    // Parameter attachments
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> octaveAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> synthModeAttachment;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (GuitarToBassAudioProcessorEditor)
 };

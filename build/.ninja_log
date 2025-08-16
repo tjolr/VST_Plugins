@@ -82,3 +82,25 @@
 4496	4817	1755372558105662706	GuitarToBassPlugin_artefacts/AU/Guitar to Bass.component/Contents/MacOS/Guitar to Bass	2dc21a74180930dc
 2229	5251	1755372555838425417	CMakeFiles/GuitarToBassPlugin_VST3.dir/JUCE/modules/juce_audio_plugin_client/juce_audio_plugin_client_VST3.mm.o	1cb82610e3e5aa1a
 5251	6157	1755372558860891287	GuitarToBassPlugin_artefacts/VST3/Guitar to Bass.vst3/Contents/MacOS/Guitar to Bass	c7dd171d7e61915f
+3	98	1755372847985962905	/Users/tjol/dev/private/VST_plugins/VST_template/build/CMakeFiles/cmake.verify_globs	95e36d66f5a2e7c4
+111	4072	1755372848094299086	CMakeFiles/GuitarToBassPlugin.dir/Source/PluginEditor.cpp.o	fdf60006d8cb0e3a
+111	4089	1755372848093907627	CMakeFiles/GuitarToBassPlugin.dir/Source/PluginProcessor.cpp.o	4a1be86510f7adb2
+4089	4405	1755372852071818989	GuitarToBassPlugin_artefacts/libGuitar to Bass_SharedCode.a	5f665b36b2c5b1fd
+4405	4834	1755372852388037724	GuitarToBassPlugin_artefacts/Standalone/Guitar to Bass.app/Contents/MacOS/Guitar to Bass	cdeacf724bfd0945
+4405	4990	1755372852388305557	GuitarToBassPlugin_artefacts/AU/Guitar to Bass.component/Contents/MacOS/Guitar to Bass	2dc21a74180930dc
+4406	5298	1755372852388511682	GuitarToBassPlugin_artefacts/VST3/Guitar to Bass.vst3/Contents/MacOS/Guitar to Bass	c7dd171d7e61915f
+2	101	1755372940228541502	/Users/tjol/dev/private/VST_plugins/VST_template/build/CMakeFiles/cmake.verify_globs	95e36d66f5a2e7c4
+114	1425	1755372940340168671	CMakeFiles/GuitarToBassPlugin.dir/Source/PluginEditor.cpp.o	fdf60006d8cb0e3a
+114	1515	1755372940339726546	CMakeFiles/GuitarToBassPlugin.dir/Source/PluginProcessor.cpp.o	4a1be86510f7adb2
+1515	1790	1755372941741235041	GuitarToBassPlugin_artefacts/libGuitar to Bass_SharedCode.a	5f665b36b2c5b1fd
+1790	2101	1755372942016082919	GuitarToBassPlugin_artefacts/Standalone/Guitar to Bass.app/Contents/MacOS/Guitar to Bass	cdeacf724bfd0945
+1790	2238	1755372942016350253	GuitarToBassPlugin_artefacts/AU/Guitar to Bass.component/Contents/MacOS/Guitar to Bass	2dc21a74180930dc
+1791	2514	1755372942016536545	GuitarToBassPlugin_artefacts/VST3/Guitar to Bass.vst3/Contents/MacOS/Guitar to Bass	c7dd171d7e61915f
+3	96	1755373061075239088	/Users/tjol/dev/private/VST_plugins/VST_template/build/CMakeFiles/cmake.verify_globs	95e36d66f5a2e7c4
+2	120	1755373084634489777	/Users/tjol/dev/private/VST_plugins/VST_template/build/CMakeFiles/cmake.verify_globs	95e36d66f5a2e7c4
+138	1502	1755373084731134518	CMakeFiles/GuitarToBassPlugin.dir/Source/PluginEditor.cpp.o	fdf60006d8cb0e3a
+133	1589	1755373084730422393	CMakeFiles/GuitarToBassPlugin.dir/Source/PluginProcessor.cpp.o	4a1be86510f7adb2
+1589	1872	1755373086182539970	GuitarToBassPlugin_artefacts/libGuitar to Bass_SharedCode.a	5f665b36b2c5b1fd
+1872	2182	1755373086464764604	GuitarToBassPlugin_artefacts/Standalone/Guitar to Bass.app/Contents/MacOS/Guitar to Bass	cdeacf724bfd0945
+1872	2326	1755373086465028021	GuitarToBassPlugin_artefacts/AU/Guitar to Bass.component/Contents/MacOS/Guitar to Bass	2dc21a74180930dc
+1872	2612	1755373086465221188	GuitarToBassPlugin_artefacts/VST3/Guitar to Bass.vst3/Contents/MacOS/Guitar to Bass	c7dd171d7e61915f
