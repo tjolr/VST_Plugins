@@ -59,18 +59,31 @@ GuitarToBassAudioProcessorEditor::GuitarToBassAudioProcessorEditor (GuitarToBass
     inputTestButton.setColour(juce::ToggleButton::tickColourId, juce::Colours::red);
     addAndMakeVisible(inputTestButton);
     
-    // Set up level meter labels
-    inputMeterLabel.setText("Input", juce::dontSendNotification);
-    inputMeterLabel.setFont(juce::FontOptions(12.0f));
-    inputMeterLabel.setColour(juce::Label::textColourId, juce::Colours::white);
+    // Set up level meter labels with enhanced styling
+    inputMeterLabel.setText("INPUT LEVEL", juce::dontSendNotification);
+    inputMeterLabel.setFont(juce::FontOptions(14.0f, juce::Font::bold));
+    inputMeterLabel.setColour(juce::Label::textColourId, juce::Colours::lightgreen);
     inputMeterLabel.setJustificationType(juce::Justification::centred);
     addAndMakeVisible(inputMeterLabel);
     
-    outputMeterLabel.setText("Output", juce::dontSendNotification);
-    outputMeterLabel.setFont(juce::FontOptions(12.0f));
-    outputMeterLabel.setColour(juce::Label::textColourId, juce::Colours::white);
+    outputMeterLabel.setText("OUTPUT LEVEL", juce::dontSendNotification);
+    outputMeterLabel.setFont(juce::FontOptions(14.0f, juce::Font::bold));
+    outputMeterLabel.setColour(juce::Label::textColourId, juce::Colours::orange);
     outputMeterLabel.setJustificationType(juce::Justification::centred);
     addAndMakeVisible(outputMeterLabel);
+    
+    // Set up dB display labels
+    inputDbLabel.setText("-∞ dB", juce::dontSendNotification);
+    inputDbLabel.setFont(juce::FontOptions(12.0f, juce::Font::bold));
+    inputDbLabel.setColour(juce::Label::textColourId, juce::Colours::lightgreen);
+    inputDbLabel.setJustificationType(juce::Justification::centred);
+    addAndMakeVisible(inputDbLabel);
+    
+    outputDbLabel.setText("-∞ dB", juce::dontSendNotification);
+    outputDbLabel.setFont(juce::FontOptions(12.0f, juce::Font::bold));
+    outputDbLabel.setColour(juce::Label::textColourId, juce::Colours::orange);
+    outputDbLabel.setJustificationType(juce::Justification::centred);
+    addAndMakeVisible(outputDbLabel);
     
     // Create parameter attachments
     auto& params = audioProcessor.getParameters();
@@ -81,7 +94,7 @@ GuitarToBassAudioProcessorEditor::GuitarToBassAudioProcessorEditor (GuitarToBass
     // Start timer for pitch display updates
     startTimerHz(30);
     
-    setSize (500, 200);
+    setSize (600, 380);
 }
 
 GuitarToBassAudioProcessorEditor::~GuitarToBassAudioProcessorEditor()
@@ -110,47 +123,56 @@ void GuitarToBassAudioProcessorEditor::paint (juce::Graphics& g)
 void GuitarToBassAudioProcessorEditor::resized()
 {
     auto bounds = getLocalBounds();
-    bounds.reduce(16, 16);
+    bounds.reduce(16, 20); // Increased bottom margin
     
     // Title at the top
     titleLabel.setBounds(bounds.removeFromTop(40));
-    bounds.removeFromTop(10);
+    bounds.removeFromTop(15);
     
     // Pitch display
     pitchDisplayLabel.setBounds(bounds.removeFromTop(30));
-    bounds.removeFromTop(20);
+    bounds.removeFromTop(25);
     
     // Octave slider
     auto octaveArea = bounds.removeFromTop(30);
     octaveArea.removeFromLeft(100); // Space for label
     octaveSlider.setBounds(octaveArea);
-    bounds.removeFromTop(10);
+    bounds.removeFromTop(15);
     
     // Synth mode toggle
     auto synthArea = bounds.removeFromTop(30);
     synthArea.removeFromLeft(100); // Space for label
     synthModeToggle.setBounds(synthArea.removeFromLeft(80));
-    bounds.removeFromTop(10);
+    bounds.removeFromTop(15);
     
     // Input test button
     auto testArea = bounds.removeFromTop(30);
     inputTestButton.setBounds(testArea.removeFromLeft(120));
-    bounds.removeFromTop(15);
+    bounds.removeFromTop(20);
     
-    // Level meters at the bottom
-    auto meterArea = bounds.removeFromBottom(60);
+    // Level meters at the bottom - made larger and more prominent
+    auto meterArea = bounds.removeFromBottom(150);
     
     // Input meter
-    auto inputArea = meterArea.removeFromLeft(meterArea.getWidth() / 2 - 10);
-    inputMeterLabel.setBounds(inputArea.removeFromTop(20));
+    auto inputArea = meterArea.removeFromLeft(meterArea.getWidth() / 2 - 15);
+    inputMeterLabel.setBounds(inputArea.removeFromTop(25));
     inputMeterBounds = inputArea.toFloat();
     
-    meterArea.removeFromLeft(20); // Gap between meters
+    // Input dB label positioned below the meter
+    inputDbLabel.setBounds(inputArea.getX(), inputArea.getBottom() + 5, inputArea.getWidth(), 20);
+    
+    meterArea.removeFromLeft(30); // Gap between meters
     
     // Output meter
     auto outputArea = meterArea;
-    outputMeterLabel.setBounds(outputArea.removeFromTop(20));
+    outputMeterLabel.setBounds(outputArea.removeFromTop(25));
     outputMeterBounds = outputArea.toFloat();
+    
+    // Output dB label positioned below the meter
+    outputDbLabel.setBounds(outputArea.getX(), outputArea.getBottom() + 5, outputArea.getWidth(), 20);
+    
+    // Add extra bottom padding to ensure dB labels are visible
+    bounds.removeFromBottom(10);
 }
 
 void GuitarToBassAudioProcessorEditor::timerCallback()
@@ -167,21 +189,33 @@ void GuitarToBassAudioProcessorEditor::timerCallback()
         pitchDisplayLabel.setText("Pitch: --", juce::dontSendNotification);
     }
     
+    // Update dB labels
+    float inputLevel = audioProcessor.getInputLevel();
+    float outputLevel = audioProcessor.getOutputLevel();
+    
+    float inputDb = inputLevel > 0.0f ? 20.0f * std::log10(inputLevel) : -60.0f;
+    float outputDb = outputLevel > 0.0f ? 20.0f * std::log10(outputLevel) : -60.0f;
+    
+    inputDbLabel.setText(juce::String(inputDb, 1) + " dB", juce::dontSendNotification);
+    outputDbLabel.setText(juce::String(outputDb, 1) + " dB", juce::dontSendNotification);
+    
     // Trigger repaint for level meters
     repaint();
 }
 
 void GuitarToBassAudioProcessorEditor::drawLevelMeter(juce::Graphics& g, const juce::Rectangle<float>& bounds, float level, juce::Colour colour)
 {
-    // Background
-    g.setColour(juce::Colours::darkgrey);
+    // Background with subtle gradient
+    juce::ColourGradient bgGradient(juce::Colours::darkgrey.darker(0.3f), bounds.getX(), bounds.getY(),
+                                    juce::Colours::darkgrey, bounds.getX(), bounds.getBottom(), false);
+    g.setGradientFill(bgGradient);
     g.fillRect(bounds);
     
     // Convert RMS level to dB and normalize for display
     float dbLevel = level > 0.0f ? 20.0f * std::log10(level) : -60.0f;
     float normalizedLevel = juce::jlimit(0.0f, 1.0f, (dbLevel + 60.0f) / 60.0f); // -60dB to 0dB range
     
-    // Level bar
+    // Level bar with gradient
     auto levelBounds = bounds;
     levelBounds.setHeight(bounds.getHeight() * normalizedLevel);
     levelBounds.setY(bounds.getBottom() - levelBounds.getHeight());
@@ -192,11 +226,52 @@ void GuitarToBassAudioProcessorEditor::drawLevelMeter(juce::Graphics& g, const j
         levelColour = juce::Colours::red;
     else if (normalizedLevel > 0.6f) // Yellow zone for medium levels
         levelColour = juce::Colours::yellow;
+    else if (normalizedLevel > 0.3f) // Green zone for low levels
+        levelColour = juce::Colours::green;
     
-    g.setColour(levelColour);
+    // Create gradient for the level bar
+    juce::ColourGradient levelGradient(levelColour.brighter(0.3f), levelBounds.getX(), levelBounds.getY(),
+                                       levelColour, levelBounds.getX(), levelBounds.getBottom(), false);
+    g.setGradientFill(levelGradient);
     g.fillRect(levelBounds);
     
-    // Border
-    g.setColour(juce::Colours::white);
+    // Add subtle highlight at the top of the level bar
+    if (normalizedLevel > 0.1f)
+    {
+        auto highlightBounds = levelBounds;
+        highlightBounds.setHeight(2.0f);
+        g.setColour(levelColour.brighter(0.5f));
+        g.fillRect(highlightBounds);
+    }
+    
+    // Draw level markers (dB scale)
+    g.setColour(juce::Colours::white.withAlpha(0.3f));
+    g.setFont(juce::FontOptions(10.0f));
+    
+    // Draw -20dB, -10dB, -6dB, -3dB, 0dB markers
+    std::vector<float> dbMarkers = {-20.0f, -10.0f, -6.0f, -3.0f, 0.0f};
+    for (float db : dbMarkers)
+    {
+        float markerPos = (db + 60.0f) / 60.0f; // Convert to 0-1 range
+        markerPos = juce::jlimit(0.0f, 1.0f, markerPos);
+        float yPos = bounds.getBottom() - (bounds.getHeight() * markerPos);
+        
+        // Draw marker line
+        g.drawHorizontalLine(static_cast<int>(yPos), bounds.getX(), bounds.getRight());
+        
+        // Draw dB label
+        juce::String dbText = juce::String(static_cast<int>(db));
+        g.drawText(dbText, bounds.getRight() + 2, static_cast<int>(yPos - 6), 25, 12, juce::Justification::left);
+    }
+    
+    // Border with subtle glow effect
+    g.setColour(juce::Colours::white.withAlpha(0.5f));
     g.drawRect(bounds, 1);
+    
+    // Add peak indicator if level is high
+    if (normalizedLevel > 0.9f)
+    {
+        g.setColour(juce::Colours::red);
+        g.fillEllipse(bounds.getRight() - 8, bounds.getY() + 2, 6, 6);
+    }
 }

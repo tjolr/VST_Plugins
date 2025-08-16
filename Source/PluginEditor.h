@@ -48,6 +48,8 @@ private:
     juce::Rectangle<float> outputMeterBounds;
     juce::Label inputMeterLabel;
     juce::Label outputMeterLabel;
+    juce::Label inputDbLabel;
+    juce::Label outputDbLabel;
     
     // Parameter attachments
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> octaveAttachment;
