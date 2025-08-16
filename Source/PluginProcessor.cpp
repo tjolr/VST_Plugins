@@ -544,6 +544,15 @@ void GuitarToBassAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         auto* inputData = buffer.getReadPointer(0);
         int numSamples = buffer.getNumSamples();
         
+        // Calculate input level (RMS)
+        float inputRMS = 0.0f;
+        for (int i = 0; i < numSamples; ++i)
+        {
+            inputRMS += inputData[i] * inputData[i];
+        }
+        inputRMS = std::sqrt(inputRMS / numSamples);
+        inputLevel_.store(inputRMS);
+        
         // Detect pitch using YIN algorithm
         float detectedPitch = pitchDetector_->detectPitch(inputData, numSamples);
         
@@ -570,6 +579,19 @@ void GuitarToBassAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         {
             auto* outputData = buffer.getWritePointer(channel);
             bassSynthesizer_->renderBlock(outputData, numSamples);
+        }
+        
+        // Calculate output level (RMS) from first output channel
+        if (totalNumOutputChannels > 0)
+        {
+            auto* outputData = buffer.getReadPointer(0);
+            float outputRMS = 0.0f;
+            for (int i = 0; i < numSamples; ++i)
+            {
+                outputRMS += outputData[i] * outputData[i];
+            }
+            outputRMS = std::sqrt(outputRMS / numSamples);
+            outputLevel_.store(outputRMS);
         }
     }
 }

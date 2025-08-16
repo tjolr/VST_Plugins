@@ -145,6 +145,8 @@ public:
     //==============================================================================
     juce::AudioProcessorValueTreeState& getParameters() { return parameters_; }
     float getCurrentPitch() const { return currentPitch_; }
+    float getInputLevel() const { return inputLevel_; }
+    float getOutputLevel() const { return outputLevel_; }
 
 private:
     //==============================================================================
@@ -152,10 +154,15 @@ private:
     std::unique_ptr<BassSynthesizer> bassSynthesizer_;
     float currentPitch_ = 0.0f;
     
+    // Level monitoring
+    std::atomic<float> inputLevel_{0.0f};
+    std::atomic<float> outputLevel_{0.0f};
+    
     // Parameter management
     juce::AudioProcessorValueTreeState parameters_;
     std::atomic<float>* octaveShiftParam_ = nullptr;
     std::atomic<float>* synthModeParam_ = nullptr;
+    std::atomic<float>* inputTestParam_ = nullptr;
     
     juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
     

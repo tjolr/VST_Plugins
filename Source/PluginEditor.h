@@ -26,6 +26,8 @@ public:
     void resized() override;
     
     void timerCallback() override;
+    
+    void drawLevelMeter(juce::Graphics& g, const juce::Rectangle<float>& bounds, float level, juce::Colour colour);
 
 private:
     // This reference is provided as a quick way for your editor to
@@ -39,10 +41,18 @@ private:
     juce::Label synthModeLabel;
     juce::Label titleLabel;
     juce::Label pitchDisplayLabel;
+    juce::ToggleButton inputTestButton;
+    
+    // Level meters
+    juce::Rectangle<float> inputMeterBounds;
+    juce::Rectangle<float> outputMeterBounds;
+    juce::Label inputMeterLabel;
+    juce::Label outputMeterLabel;
     
     // Parameter attachments
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> octaveAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> synthModeAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> inputTestAttachment;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (GuitarToBassAudioProcessorEditor)
 };
