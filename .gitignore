@@ -1,0 +1,68 @@
+# Build directories
+build/
+Builds/
+build-*/
+
+./build
+
+# CMake generated files
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.cmake
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+Icon
+._*
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Linux
+*~
+
+# JUCE specific
+JuceLibraryCode/
+*.jucer.bak
+
+# Audio plugin artifacts
+*.vst3
+*.vst
+*.component
+*.app
+*.dll
+*.so
+*.dylib
+
+# Debug and release builds
+Debug/
+Release/
+RelWithDebInfo/
+MinSizeRel/
+
+# Temporary files
+*.tmp
+*.temp
+*.log
+
+# Dependencies
+node_modules/
+vendor/
+
+# Backup files
+*.bak
+*.backup 
