@@ -26,6 +26,7 @@ public:
     void resized() override;
     
     void timerCallback() override;
+    void mouseDown(const juce::MouseEvent& event) override;
     
     void drawLevelMeter(juce::Graphics& g, const juce::Rectangle<float>& bounds, float level, juce::Colour colour);
 
@@ -41,6 +42,7 @@ private:
     juce::Label synthModeLabel;
     juce::Label titleLabel;
     juce::Label pitchDisplayLabel;
+    juce::Label debugLogLabel;
     juce::ToggleButton inputTestButton;
     
     // Level meters

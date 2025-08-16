@@ -10,10 +10,18 @@
 #include "PluginEditor.h"
 #include <cmath>
 
+// Debug logging function for editor
+static void debugLogEditor(const juce::String& message)
+{
+    juce::Logger::writeToLog("GuitarToBass Editor: " + message);
+}
+
 //==============================================================================
 GuitarToBassAudioProcessorEditor::GuitarToBassAudioProcessorEditor (GuitarToBassAudioProcessor& p)
     : AudioProcessorEditor (&p), audioProcessor (p)
 {
+    debugLogEditor("Editor constructor called");
+    
     // Set up title label
     titleLabel.setText("Guitar to Bass v3", juce::dontSendNotification);
     titleLabel.setFont(juce::FontOptions(24.0f, juce::Font::bold));
@@ -27,6 +35,17 @@ GuitarToBassAudioProcessorEditor::GuitarToBassAudioProcessorEditor (GuitarToBass
     pitchDisplayLabel.setJustificationType(juce::Justification::centred);
     pitchDisplayLabel.setColour(juce::Label::textColourId, juce::Colours::lightblue);
     addAndMakeVisible(pitchDisplayLabel);
+    
+    // Set up debug log display
+    debugLogLabel.setText("Debug: Waiting for audio...", juce::dontSendNotification);
+    debugLogLabel.setFont(juce::FontOptions(11.0f));
+    debugLogLabel.setJustificationType(juce::Justification::centred);
+    debugLogLabel.setColour(juce::Label::textColourId, juce::Colours::yellow);
+    debugLogLabel.setTooltip("Debug information - Check console for detailed logs");
+    addAndMakeVisible(debugLogLabel);
+    
+    // Add mouse listener to debug label
+    debugLogLabel.addMouseListener(this, false);
     
     // Set up octave slider
     octaveSlider.setSliderStyle(juce::Slider::LinearHorizontal);
@@ -94,12 +113,15 @@ GuitarToBassAudioProcessorEditor::GuitarToBassAudioProcessorEditor (GuitarToBass
     // Start timer for pitch display updates
     startTimerHz(30);
     
-    setSize (600, 380);
+    debugLogEditor("Editor setup complete");
+    
+    setSize (600, 420); // Increased height for debug display
 }
 
 GuitarToBassAudioProcessorEditor::~GuitarToBassAudioProcessorEditor()
 {
     stopTimer();
+    debugLogLabel.removeMouseListener(this);
 }
 
 //==============================================================================
@@ -132,6 +154,10 @@ void GuitarToBassAudioProcessorEditor::resized()
     // Pitch display
     pitchDisplayLabel.setBounds(bounds.removeFromTop(30));
     bounds.removeFromTop(25);
+    
+    // Debug log display
+    debugLogLabel.setBounds(bounds.removeFromTop(30));
+    bounds.removeFromTop(15);
     
     // Octave slider
     auto octaveArea = bounds.removeFromTop(30);
@@ -199,8 +225,75 @@ void GuitarToBassAudioProcessorEditor::timerCallback()
     inputDbLabel.setText(juce::String(inputDb, 1) + " dB", juce::dontSendNotification);
     outputDbLabel.setText(juce::String(outputDb, 1) + " dB", juce::dontSendNotification);
     
+    // Update debug display with comprehensive information
+    static int debugCounter = 0;
+    if (++debugCounter % 30 == 0) // Update debug display every second (30 Hz timer)
+    {
+        juce::String debugInfo = "Input: " + juce::String(inputDb, 1) + " dB";
+        debugInfo += " | Output: " + juce::String(outputDb, 1) + " dB";
+        debugInfo += " | Pitch: " + (currentPitch > 0.0f ? juce::String(currentPitch, 1) + " Hz" : "None");
+        
+        // Add audio activity indicators
+        bool hasInputAudio = inputLevel > 0.001f;
+        bool hasOutputAudio = outputLevel > 0.001f;
+        bool hasPitch = currentPitch > 0.0f;
+        
+        debugInfo += " | Audio: " + juce::String(hasInputAudio ? "IN" : "NO_IN") + "/" + 
+                     juce::String(hasOutputAudio ? "OUT" : "NO_OUT") + "/" + 
+                     juce::String(hasPitch ? "PITCH" : "NO_PITCH");
+        
+        debugLogLabel.setText(debugInfo, juce::dontSendNotification);
+        
+        // Log to console for detailed debugging
+        debugLogEditor("Status - Input: " + juce::String(inputDb, 1) + " dB (" + 
+                       juce::String(hasInputAudio ? "ACTIVE" : "SILENT") + "), " +
+                       "Output: " + juce::String(outputDb, 1) + " dB (" + 
+                       juce::String(hasOutputAudio ? "ACTIVE" : "SILENT") + "), " +
+                       "Pitch: " + (currentPitch > 0.0f ? juce::String(currentPitch, 1) + " Hz" : "None"));
+    }
+    
     // Trigger repaint for level meters
     repaint();
+}
+
+void GuitarToBassAudioProcessorEditor::mouseDown(const juce::MouseEvent& event)
+{
+    // If debug label was clicked, show detailed debug info
+    if (event.eventComponent == &debugLogLabel)
+    {
+        float inputLevel = audioProcessor.getInputLevel();
+        float outputLevel = audioProcessor.getOutputLevel();
+        float currentPitch = audioProcessor.getCurrentPitch();
+        
+        juce::String detailedInfo = "=== DETAILED DEBUG INFO ===\n";
+        detailedInfo += "Input Level: " + juce::String(inputLevel, 6) + " (" + 
+                       juce::String(20.0f * std::log10(inputLevel > 0.0f ? inputLevel : 0.000001f), 1) + " dB)\n";
+        detailedInfo += "Output Level: " + juce::String(outputLevel, 6) + " (" + 
+                       juce::String(20.0f * std::log10(outputLevel > 0.0f ? outputLevel : 0.000001f), 1) + " dB)\n";
+        detailedInfo += "Current Pitch: " + (currentPitch > 0.0f ? juce::String(currentPitch, 1) + " Hz" : "None") + "\n";
+        detailedInfo += "Sample Rate: " + juce::String(audioProcessor.getSampleRate()) + " Hz\n";
+        detailedInfo += "Block Size: " + juce::String(audioProcessor.getBlockSize()) + " samples\n";
+        detailedInfo += "Input Channels: " + juce::String(audioProcessor.getTotalNumInputChannels()) + "\n";
+        detailedInfo += "Output Channels: " + juce::String(audioProcessor.getTotalNumOutputChannels()) + "\n";
+        detailedInfo += "Check console for detailed processing logs";
+        
+        debugLogEditor("=== DETAILED DEBUG INFO ===");
+        debugLogEditor("Input Level: " + juce::String(inputLevel, 6) + " (" + 
+                      juce::String(20.0f * std::log10(inputLevel > 0.0f ? inputLevel : 0.000001f), 1) + " dB)");
+        debugLogEditor("Output Level: " + juce::String(outputLevel, 6) + " (" + 
+                      juce::String(20.0f * std::log10(outputLevel > 0.0f ? outputLevel : 0.000001f), 1) + " dB)");
+        debugLogEditor("Current Pitch: " + (currentPitch > 0.0f ? juce::String(currentPitch, 1) + " Hz" : "None"));
+        debugLogEditor("Sample Rate: " + juce::String(audioProcessor.getSampleRate()) + " Hz");
+        debugLogEditor("Block Size: " + juce::String(audioProcessor.getBlockSize()) + " samples");
+        debugLogEditor("Input Channels: " + juce::String(audioProcessor.getTotalNumInputChannels()));
+        debugLogEditor("Output Channels: " + juce::String(audioProcessor.getTotalNumOutputChannels()));
+        
+        // Show alert with detailed info
+        juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::InfoIcon,
+                                              "Debug Information",
+                                              detailedInfo,
+                                              "OK");
+    }
 }
 
 void GuitarToBassAudioProcessorEditor::drawLevelMeter(juce::Graphics& g, const juce::Rectangle<float>& bounds, float level, juce::Colour colour)

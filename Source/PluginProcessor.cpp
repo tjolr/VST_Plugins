@@ -12,11 +12,20 @@
 #include <cmath>
 #include <cstring>
 
+// Debug logging function
+static void debugLog(const juce::String& message)
+{
+    juce::Logger::writeToLog("GuitarToBass: " + message);
+}
+
 //==============================================================================
 // YIN Algorithm Implementation
 YINPitchDetector::YINPitchDetector(int bufferSize, float sampleRate)
     : bufferSize_(bufferSize), sampleRate_(sampleRate)
 {
+    debugLog("YINPitchDetector initialized - BufferSize: " + juce::String(bufferSize) + 
+             ", SampleRate: " + juce::String(sampleRate));
+    
     differenceBuffer_.resize(static_cast<size_t>(bufferSize / 2));
     cumulativeBuffer_.resize(static_cast<size_t>(bufferSize / 2));
     
@@ -31,18 +40,53 @@ YINPitchDetector::YINPitchDetector(int bufferSize, float sampleRate)
     int fftSize = 1 << fftOrder_;
     fftBuffer_.resize(static_cast<size_t>(fftSize * 2)); // Complex numbers need 2x space
     spectrum_.resize(static_cast<size_t>(fftSize / 2)); // Only need positive frequencies
+    
+    debugLog("YINPitchDetector setup complete - HopSize: " + juce::String(hopSize_) + 
+             ", FFTSize: " + juce::String(fftSize));
 }
 
 float YINPitchDetector::detectPitch(const float* audioBuffer, int numSamples)
 {
+    // Debug: Check input buffer
+    if (audioBuffer == nullptr)
+    {
+        debugLog("ERROR: detectPitch called with null audio buffer!");
+        return lastPitch_;
+    }
+    
+    // Debug: Check for audio activity
+    float maxSample = 0.0f;
+    float rms = 0.0f;
+    for (int i = 0; i < numSamples; ++i)
+    {
+        maxSample = std::max(maxSample, std::abs(audioBuffer[i]));
+        rms += audioBuffer[i] * audioBuffer[i];
+    }
+    rms = std::sqrt(rms / numSamples);
+    
+    static int debugCounter = 0;
+    if (++debugCounter % 100 == 0) // Log every 100th call
+    {
+        debugLog("Pitch detection - MaxSample: " + juce::String(maxSample, 6) + 
+                 ", RMS: " + juce::String(rms, 6) + ", NumSamples: " + juce::String(numSamples));
+    }
+    
     // Process input through overlapping window system
     processOverlappingWindow(audioBuffer, numSamples);
     
     // Only run analysis when we have a full buffer
     if (!bufferReady_)
+    {
+        if (debugCounter % 100 == 0)
+            debugLog("Buffer not ready for analysis - WriteIndex: " + juce::String(writeIndex_) + 
+                     ", HopSize: " + juce::String(hopSize_) + ", BufferSize: " + juce::String(bufferSize_));
         return lastPitch_;
+    }
         
     // Try polyphonic detection first for better chord handling
+    if (debugCounter % 100 == 0)
+        debugLog("Running pitch detection analysis...");
+    
     auto multiplePitches = detectMultiplePitches(analysisBuffer_.data(), bufferSize_);
     float frequency = 0.0f;
     
@@ -50,9 +94,15 @@ float YINPitchDetector::detectPitch(const float* audioBuffer, int numSamples)
     {
         // Use lowest detected pitch for bass
         frequency = findLowestPitch(multiplePitches);
+        if (debugCounter % 100 == 0)
+            debugLog("Polyphonic detection found " + juce::String(multiplePitches.size()) + 
+                     " pitches, lowest: " + juce::String(frequency, 1) + " Hz");
     }
     else
     {
+        if (debugCounter % 100 == 0)
+            debugLog("Polyphonic detection found no pitches, trying YIN...");
+        
         // Fall back to YIN for monophonic detection
         std::vector<float> windowedBuffer(static_cast<size_t>(bufferSize_));
         for (int i = 0; i < bufferSize_; ++i)
@@ -70,13 +120,27 @@ float YINPitchDetector::detectPitch(const float* audioBuffer, int numSamples)
             if (refinedPeriod > 0.0f)
             {
                 frequency = sampleRate_ / refinedPeriod;
+                if (debugCounter % 100 == 0)
+                    debugLog("YIN detection - PeriodIndex: " + juce::String(periodIndex) + 
+                             ", RefinedPeriod: " + juce::String(refinedPeriod, 3) + 
+                             ", Frequency: " + juce::String(frequency, 1) + " Hz");
             }
+        }
+        else
+        {
+            if (debugCounter % 100 == 0)
+                debugLog("YIN detection - No pitch found (periodIndex = -1)");
         }
     }
     
     // Filter out frequencies outside guitar range
     if (frequency < minFreq_ || frequency > maxFreq_)
+    {
+        if (debugCounter % 100 == 0 && frequency > 0.0f)
+            debugLog("Frequency " + juce::String(frequency, 1) + " Hz outside guitar range (" + 
+                     juce::String(minFreq_) + "-" + juce::String(maxFreq_) + " Hz)");
         return lastPitch_;
+    }
     
     // Apply smoothing to reduce jitter
     if (frequency > 0.0f)
@@ -89,6 +153,9 @@ float YINPitchDetector::detectPitch(const float* audioBuffer, int numSamples)
         {
             lastPitch_ = frequency;
         }
+        
+        if (debugCounter % 100 == 0)
+            debugLog("Final pitch: " + juce::String(lastPitch_, 1) + " Hz");
     }
         
     return lastPitch_;
@@ -157,6 +224,13 @@ float YINPitchDetector::parabolicInterpolation(int peakIndex)
 
 void YINPitchDetector::processOverlappingWindow(const float* input, int numSamples)
 {
+    static int windowCounter = 0;
+    if (++windowCounter % 1000 == 0) // Log every 1000th call
+    {
+        debugLog("processOverlappingWindow - WriteIndex: " + juce::String(writeIndex_) + 
+                 ", HopSize: " + juce::String(hopSize_) + ", BufferReady: " + juce::String(bufferReady_ ? "true" : "false"));
+    }
+    
     for (int i = 0; i < numSamples; ++i)
     {
         analysisBuffer_[static_cast<size_t>(writeIndex_)] = input[i];
@@ -166,6 +240,9 @@ void YINPitchDetector::processOverlappingWindow(const float* input, int numSampl
         if (writeIndex_ >= hopSize_)
         {
             bufferReady_ = true;
+            if (windowCounter % 1000 == 0)
+                debugLog("Buffer now ready for analysis!");
+            
             writeIndex_ = 0;
             
             // Shift buffer for overlap
@@ -260,8 +337,10 @@ float YINPitchDetector::findLowestPitch(const std::vector<float>& pitches)
 BassSynthesizer::BassSynthesizer(float sampleRate)
     : sampleRate_(sampleRate)
 {
+    debugLog("BassSynthesizer created with sample rate: " + juce::String(sampleRate));
     wavetable_.resize(wavetableSize_);
     generateWavetable();
+    debugLog("BassSynthesizer initialization complete");
 }
 
 void BassSynthesizer::setFrequency(float frequency)
@@ -299,6 +378,23 @@ void BassSynthesizer::setSynthMode(bool synthMode)
 
 void BassSynthesizer::renderBlock(float* output, int numSamples)
 {
+    // Debug: Check output buffer
+    if (output == nullptr)
+    {
+        debugLog("ERROR: BassSynthesizer renderBlock called with null output buffer!");
+        return;
+    }
+    
+    // Debug: Log synthesis parameters periodically
+    static int synthCounter = 0;
+    if (++synthCounter % 10000 == 0) // Log every 10000th call
+    {
+        debugLog("BassSynthesizer - Frequency: " + juce::String(frequency_, 1) + 
+                 ", Amplitude: " + juce::String(amplitude_, 3) + 
+                 ", Envelope: " + juce::String(envelope_, 3) + 
+                 ", SynthMode: " + juce::String(synthMode_ ? "Wavetable" : "Analog"));
+    }
+    
     for (int i = 0; i < numSamples; ++i)
     {
         // Update envelope
@@ -319,9 +415,9 @@ void BassSynthesizer::renderBlock(float* output, int numSamples)
         }
         else
         {
-                    analogPhase_ += static_cast<float>(phaseIncrement_ * 2.0f * M_PI);
-        if (analogPhase_ >= 2.0f * M_PI)
-            analogPhase_ -= static_cast<float>(2.0f * M_PI);
+            analogPhase_ += static_cast<float>(phaseIncrement_ * 2.0f * M_PI);
+            if (analogPhase_ >= 2.0f * M_PI)
+                analogPhase_ -= static_cast<float>(2.0f * M_PI);
         }
     }
 }
@@ -398,6 +494,14 @@ juce::AudioProcessorValueTreeState::ParameterLayout GuitarToBassAudioProcessor::
         juce::AudioParameterBoolAttributes().withStringFromValueFunction(
             [](bool value, int) { return value ? "Synth" : "Analog"; })));
     
+    // Input test parameter
+    parameters.push_back(std::make_unique<juce::AudioParameterBool>(
+        "inputTest",
+        "Input Test",
+        false,
+        juce::AudioParameterBoolAttributes().withStringFromValueFunction(
+            [](bool value, int) { return value ? "ON" : "OFF"; })));
+    
     return { parameters.begin(), parameters.end() };
 }
 
@@ -414,9 +518,17 @@ GuitarToBassAudioProcessor::GuitarToBassAudioProcessor()
                        ), parameters_(*this, nullptr, "PARAMETERS", createParameterLayout())
 #endif
 {
+    debugLog("GuitarToBassAudioProcessor constructor called");
+    
     // Get parameter pointers for real-time access
     octaveShiftParam_ = parameters_.getRawParameterValue("octaveShift");
     synthModeParam_ = parameters_.getRawParameterValue("synthMode");
+    inputTestParam_ = parameters_.getRawParameterValue("inputTest");
+    
+    debugLog("Parameter pointers obtained - OctaveShift: " + juce::String(octaveShiftParam_ ? "OK" : "NULL") + 
+             ", SynthMode: " + juce::String(synthModeParam_ ? "OK" : "NULL"));
+    
+    debugLog("GuitarToBassAudioProcessor initialization complete");
 }
 
 GuitarToBassAudioProcessor::~GuitarToBassAudioProcessor()
@@ -488,12 +600,19 @@ void GuitarToBassAudioProcessor::changeProgramName ([[maybe_unused]] int index, 
 //==============================================================================
 void GuitarToBassAudioProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
 {
+    debugLog("prepareToPlay called - SampleRate: " + juce::String(sampleRate) + 
+             ", SamplesPerBlock: " + juce::String(samplesPerBlock));
+    
     // Initialize YIN pitch detector with appropriate buffer size
     int pitchAnalysisSize = std::max(1024, samplesPerBlock * 2);
+    debugLog("Creating YINPitchDetector with analysis size: " + juce::String(pitchAnalysisSize));
     pitchDetector_ = std::make_unique<YINPitchDetector>(pitchAnalysisSize, static_cast<float>(sampleRate));
     
     // Initialize bass synthesizer
+    debugLog("Creating BassSynthesizer with sample rate: " + juce::String(sampleRate));
     bassSynthesizer_ = std::make_unique<BassSynthesizer>(static_cast<float>(sampleRate));
+    
+    debugLog("prepareToPlay completed successfully");
 }
 
 void GuitarToBassAudioProcessor::releaseResources()
@@ -534,24 +653,73 @@ void GuitarToBassAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     auto totalNumInputChannels  = getTotalNumInputChannels();
     auto totalNumOutputChannels = getTotalNumOutputChannels();
 
+    // Debug: Log buffer info periodically
+    static int processCounter = 0;
+    if (++processCounter % 1000 == 0) // Log every 1000th process block
+    {
+        debugLog("ProcessBlock - InputChannels: " + juce::String(totalNumInputChannels) + 
+                 ", OutputChannels: " + juce::String(totalNumOutputChannels) + 
+                 ", NumSamples: " + juce::String(buffer.getNumSamples()) + 
+                 ", SampleRate: " + juce::String(getSampleRate()));
+    }
+
     // Clear any unused output channels
     for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
         buffer.clear (i, 0, buffer.getNumSamples());
 
+    // Generate test tone if input test is enabled
+    bool inputTestEnabled = inputTestParam_ ? inputTestParam_->load() > 0.5f : false;
+    if (inputTestEnabled)
+    {
+        debugLog("Input test mode enabled - generating test tone");
+        static float testPhase = 0.0f;
+        float testFreq = 330.0f; // E4 note (within guitar range 80-400 Hz)
+        float testIncrement = testFreq / getSampleRate();
+        
+        for (int channel = 0; channel < totalNumInputChannels; ++channel)
+        {
+            auto* inputData = buffer.getWritePointer(channel);
+            for (int i = 0; i < buffer.getNumSamples(); ++i)
+            {
+                inputData[i] = 0.1f * std::sin(testPhase);
+                testPhase += static_cast<float>(2.0f * M_PI * testIncrement);
+                if (testPhase >= 2.0f * M_PI)
+                    testPhase -= static_cast<float>(2.0f * M_PI);
+            }
+        }
+    }
+    
     // Perform pitch detection and bass synthesis
     if (totalNumInputChannels > 0 && pitchDetector_ && bassSynthesizer_)
     {
         auto* inputData = buffer.getReadPointer(0);
         int numSamples = buffer.getNumSamples();
         
-        // Calculate input level (RMS)
+        // Debug: Check input data
+        if (inputData == nullptr)
+        {
+            debugLog("ERROR: Input data pointer is null!");
+            return;
+        }
+        
+        // Calculate input level (RMS) and check for audio activity
         float inputRMS = 0.0f;
+        float maxInputSample = 0.0f;
         for (int i = 0; i < numSamples; ++i)
         {
             inputRMS += inputData[i] * inputData[i];
+            maxInputSample = std::max(maxInputSample, std::abs(inputData[i]));
         }
         inputRMS = std::sqrt(inputRMS / numSamples);
         inputLevel_.store(inputRMS);
+        
+        // Debug: Log input levels periodically
+        if (processCounter % 1000 == 0)
+        {
+            debugLog("Input levels - RMS: " + juce::String(inputRMS, 6) + 
+                     ", MaxSample: " + juce::String(maxInputSample, 6) + 
+                     ", HasAudio: " + juce::String(inputRMS > 0.001f ? "YES" : "NO"));
+        }
         
         // Detect pitch using YIN algorithm
         float detectedPitch = pitchDetector_->detectPitch(inputData, numSamples);
@@ -569,6 +737,16 @@ void GuitarToBassAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         // Check synth mode
         bool synthMode = synthModeParam_ ? synthModeParam_->load() > 0.5f : true;
         
+        // Debug: Log synthesis parameters periodically
+        if (processCounter % 1000 == 0)
+        {
+            debugLog("Synthesis - DetectedPitch: " + juce::String(detectedPitch, 1) + 
+                     ", CurrentPitch: " + juce::String(currentPitch_, 1) + 
+                     ", TargetPitch: " + juce::String(targetPitch, 1) + 
+                     ", OctaveShift: " + juce::String(octaveShift, 1) + 
+                     ", SynthMode: " + juce::String(synthMode ? "Synth" : "Analog"));
+        }
+        
         // Configure bass synthesizer
         bassSynthesizer_->setFrequency(targetPitch);
         bassSynthesizer_->setAmplitude(currentPitch_ > 0.0f ? 0.3f : 0.0f);
@@ -578,6 +756,11 @@ void GuitarToBassAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         for (int channel = 0; channel < totalNumOutputChannels; ++channel)
         {
             auto* outputData = buffer.getWritePointer(channel);
+            if (outputData == nullptr)
+            {
+                debugLog("ERROR: Output data pointer is null for channel " + juce::String(channel));
+                continue;
+            }
             bassSynthesizer_->renderBlock(outputData, numSamples);
         }
         
@@ -585,13 +768,35 @@ void GuitarToBassAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         if (totalNumOutputChannels > 0)
         {
             auto* outputData = buffer.getReadPointer(0);
-            float outputRMS = 0.0f;
-            for (int i = 0; i < numSamples; ++i)
+            if (outputData != nullptr)
             {
-                outputRMS += outputData[i] * outputData[i];
+                float outputRMS = 0.0f;
+                float maxOutputSample = 0.0f;
+                for (int i = 0; i < numSamples; ++i)
+                {
+                    outputRMS += outputData[i] * outputData[i];
+                    maxOutputSample = std::max(maxOutputSample, std::abs(outputData[i]));
+                }
+                outputRMS = std::sqrt(outputRMS / numSamples);
+                outputLevel_.store(outputRMS);
+                
+                // Debug: Log output levels periodically
+                if (processCounter % 1000 == 0)
+                {
+                    debugLog("Output levels - RMS: " + juce::String(outputRMS, 6) + 
+                             ", MaxSample: " + juce::String(maxOutputSample, 6));
+                }
             }
-            outputRMS = std::sqrt(outputRMS / numSamples);
-            outputLevel_.store(outputRMS);
+        }
+    }
+    else
+    {
+        // Debug: Log when processing is skipped
+        if (processCounter % 1000 == 0)
+        {
+            debugLog("Processing skipped - InputChannels: " + juce::String(totalNumInputChannels) + 
+                     ", PitchDetector: " + juce::String(pitchDetector_ ? "OK" : "NULL") + 
+                     ", BassSynthesizer: " + juce::String(bassSynthesizer_ ? "OK" : "NULL"));
         }
     }
 }
