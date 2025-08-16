@@ -107,6 +107,127 @@ float YINPitchDetector::parabolicInterpolation(int peakIndex)
 }
 
 //==============================================================================
+// Bass Synthesizer Implementation
+BassSynthesizer::BassSynthesizer(float sampleRate)
+    : sampleRate_(sampleRate)
+{
+    wavetable_.resize(wavetableSize_);
+    generateWavetable();
+}
+
+void BassSynthesizer::setFrequency(float frequency)
+{
+    frequency_ = frequency;
+    phaseIncrement_ = frequency_ / sampleRate_;
+    
+    // Update envelope target when frequency changes (note on)
+    if (frequency_ > 0.0f)
+    {
+        envelopeTarget_ = 1.0f;
+    }
+    else
+    {
+        envelopeTarget_ = 0.0f;
+    }
+}
+
+void BassSynthesizer::setAmplitude(float amplitude)
+{
+    amplitude_ = juce::jlimit(0.0f, 1.0f, amplitude);
+}
+
+void BassSynthesizer::setSynthMode(bool synthMode)
+{
+    if (synthMode_ != synthMode)
+    {
+        synthMode_ = synthMode;
+        if (synthMode_)
+        {
+            generateWavetable();
+        }
+    }
+}
+
+void BassSynthesizer::renderBlock(float* output, int numSamples)
+{
+    for (int i = 0; i < numSamples; ++i)
+    {
+        // Update envelope
+        envelope_ += (envelopeTarget_ - envelope_) * envelopeRate_;
+        
+        // Generate sample
+        float sample = getNextSample();
+        
+        // Apply envelope and amplitude
+        output[i] = sample * envelope_ * amplitude_;
+        
+        // Advance phase
+        if (synthMode_)
+        {
+            phase_ += phaseIncrement_;
+            if (phase_ >= 1.0f)
+                phase_ -= 1.0f;
+        }
+        else
+        {
+            analogPhase_ += phaseIncrement_ * 2.0f * M_PI;
+            if (analogPhase_ >= 2.0f * M_PI)
+                analogPhase_ -= 2.0f * M_PI;
+        }
+    }
+}
+
+void BassSynthesizer::reset()
+{
+    phase_ = 0.0f;
+    analogPhase_ = 0.0f;
+    envelope_ = 0.0f;
+    lowPassState_ = 0.0f;
+}
+
+void BassSynthesizer::generateWavetable()
+{
+    // Generate a bass-rich wavetable with fundamental + harmonics
+    for (int i = 0; i < wavetableSize_; ++i)
+    {
+        float x = static_cast<float>(i) / wavetableSize_;
+        float angle = 2.0f * M_PI * x;
+        
+        // Fundamental + some harmonics for bass character
+        float sample = std::sin(angle)                    // Fundamental
+                     + 0.3f * std::sin(2.0f * angle)     // 2nd harmonic
+                     + 0.15f * std::sin(3.0f * angle)    // 3rd harmonic
+                     + 0.1f * std::sin(4.0f * angle);    // 4th harmonic
+        
+        wavetable_[i] = sample * 0.5f; // Scale down
+    }
+}
+
+float BassSynthesizer::getNextSample()
+{
+    if (synthMode_)
+    {
+        // Wavetable synthesis with linear interpolation
+        float floatIndex = phase_ * wavetableSize_;
+        int index1 = static_cast<int>(floatIndex);
+        int index2 = (index1 + 1) % wavetableSize_;
+        float frac = floatIndex - index1;
+        
+        return wavetable_[index1] * (1.0f - frac) + wavetable_[index2] * frac;
+    }
+    else
+    {
+        // Analog-style synthesis: sawtooth + lowpass filter
+        float sawtooth = (analogPhase_ / M_PI) - 1.0f; // -1 to 1 sawtooth
+        
+        // Simple one-pole lowpass filter
+        lowPassState_ += (sawtooth - lowPassState_) * filterCutoff_;
+        
+        return lowPassState_ * 0.5f;
+    }
+}
+
+//==============================================================================
 juce::AudioProcessorValueTreeState::ParameterLayout GuitarToBassAudioProcessor::createParameterLayout()
 {
     std::vector<std::unique_ptr<juce::RangedAudioParameter>> parameters;
@@ -221,6 +342,9 @@ void GuitarToBassAudioProcessor::prepareToPlay (double sampleRate, int samplesPe
     // Initialize YIN pitch detector with appropriate buffer size
     int pitchAnalysisSize = std::max(1024, samplesPerBlock * 2);
     pitchDetector_ = std::make_unique<YINPitchDetector>(pitchAnalysisSize, static_cast<float>(sampleRate));
+    
+    // Initialize bass synthesizer
+    bassSynthesizer_ = std::make_unique<BassSynthesizer>(static_cast<float>(sampleRate));
 }
 
 void GuitarToBassAudioProcessor::releaseResources()
@@ -265,8 +389,8 @@ void GuitarToBassAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     for (auto i = totalNumInputChannels; i < totalNumOutputChannels; ++i)
         buffer.clear (i, 0, buffer.getNumSamples());
 
-    // Perform pitch detection on the first input channel
-    if (totalNumInputChannels > 0 && pitchDetector_)
+    // Perform pitch detection and bass synthesis
+    if (totalNumInputChannels > 0 && pitchDetector_ && bassSynthesizer_)
     {
         auto* inputData = buffer.getReadPointer(0);
         int numSamples = buffer.getNumSamples();
@@ -278,23 +402,25 @@ void GuitarToBassAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         if (detectedPitch > 0.0f)
         {
             currentPitch_ = currentPitch_ * 0.8f + detectedPitch * 0.2f;
-            
-            // Apply octave shifting
-            float octaveShift = octaveShiftParam_ ? octaveShiftParam_->load() : 1.0f;
-            float targetPitch = currentPitch_ / std::pow(2.0f, octaveShift);
-            
-            // Check synth mode
-            bool synthMode = synthModeParam_ ? synthModeParam_->load() > 0.5f : true;
-            
-            // TODO: Generate bass tone based on targetPitch and synthMode
-            // For now, just store these values for later synthesis implementation
         }
         
-        // For now, just pass through the input (we'll add synthesis later)
-        for (int channel = 0; channel < std::min(totalNumInputChannels, totalNumOutputChannels); ++channel)
+        // Apply octave shifting
+        float octaveShift = octaveShiftParam_ ? octaveShiftParam_->load() : 1.0f;
+        float targetPitch = currentPitch_ / std::pow(2.0f, octaveShift);
+        
+        // Check synth mode
+        bool synthMode = synthModeParam_ ? synthModeParam_->load() > 0.5f : true;
+        
+        // Configure bass synthesizer
+        bassSynthesizer_->setFrequency(targetPitch);
+        bassSynthesizer_->setAmplitude(currentPitch_ > 0.0f ? 0.3f : 0.0f);
+        bassSynthesizer_->setSynthMode(synthMode);
+        
+        // Generate bass output
+        for (int channel = 0; channel < totalNumOutputChannels; ++channel)
         {
-            if (channel != 0)
-                buffer.copyFrom(channel, 0, buffer, 0, 0, numSamples);
+            auto* outputData = buffer.getWritePointer(channel);
+            bassSynthesizer_->renderBlock(outputData, numSamples);
         }
     }
 }

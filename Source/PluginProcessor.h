@@ -13,6 +13,47 @@
 #include <vector>
 
 //==============================================================================
+// Bass Synthesizer for generating bass tones
+class BassSynthesizer
+{
+public:
+    BassSynthesizer(float sampleRate);
+    
+    void setFrequency(float frequency);
+    void setAmplitude(float amplitude);
+    void setSynthMode(bool synthMode); // true = synth, false = analog
+    void renderBlock(float* output, int numSamples);
+    void reset();
+    
+private:
+    void generateWavetable();
+    void generateAnalogWave();
+    float getNextSample();
+    
+    float sampleRate_;
+    float frequency_ = 440.0f;
+    float amplitude_ = 0.5f;
+    bool synthMode_ = true;
+    
+    // Wavetable synthesis
+    std::vector<float> wavetable_;
+    float phase_ = 0.0f;
+    float phaseIncrement_ = 0.0f;
+    
+    // Analog synthesis (simple oscillator + filter)
+    float analogPhase_ = 0.0f;
+    float lowPassState_ = 0.0f;
+    float filterCutoff_ = 0.3f;
+    
+    // Envelope
+    float envelope_ = 0.0f;
+    float envelopeTarget_ = 0.0f;
+    float envelopeRate_ = 0.01f;
+    
+    static constexpr int wavetableSize_ = 1024;
+};
+
+//==============================================================================
 // YIN Algorithm for pitch detection
 class YINPitchDetector
 {
@@ -84,6 +125,7 @@ public:
 private:
     //==============================================================================
     std::unique_ptr<YINPitchDetector> pitchDetector_;
+    std::unique_ptr<BassSynthesizer> bassSynthesizer_;
     float currentPitch_ = 0.0f;
     
     // Parameter management
