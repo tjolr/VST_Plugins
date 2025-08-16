@@ -10,6 +10,7 @@
 #include "PluginEditor.h"
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 
 //==============================================================================
 // YIN Algorithm Implementation
@@ -18,31 +19,79 @@ YINPitchDetector::YINPitchDetector(int bufferSize, float sampleRate)
 {
     differenceBuffer_.resize(bufferSize / 2);
     cumulativeBuffer_.resize(bufferSize / 2);
+    
+    // Set up overlapping window analysis
+    analysisBuffer_.resize(bufferSize);
+    window_.resize(bufferSize);
+    hopSize_ = static_cast<int>(bufferSize * (1.0f - overlapRatio_));
+    generateWindow();
+    
+    // Set up FFT for polyphonic analysis
+    fft_ = std::make_unique<juce::dsp::FFT>(fftOrder_);
+    int fftSize = 1 << fftOrder_;
+    fftBuffer_.resize(fftSize * 2); // Complex numbers need 2x space
+    spectrum_.resize(fftSize / 2); // Only need positive frequencies
 }
 
 float YINPitchDetector::detectPitch(const float* audioBuffer, int numSamples)
 {
-    if (numSamples < bufferSize_ / 2)
-        return 0.0f;
-        
-    calculateDifference(audioBuffer, numSamples);
-    calculateCumulativeMeanNormalizedDifference();
+    // Process input through overlapping window system
+    processOverlappingWindow(audioBuffer, numSamples);
     
-    int periodIndex = getAbsoluteThreshold(0.1f);
-    if (periodIndex == -1)
-        return 0.0f;
+    // Only run analysis when we have a full buffer
+    if (!bufferReady_)
+        return lastPitch_;
         
-    float refinedPeriod = parabolicInterpolation(periodIndex);
-    if (refinedPeriod <= 0.0f)
-        return 0.0f;
+    // Try polyphonic detection first for better chord handling
+    auto multiplePitches = detectMultiplePitches(analysisBuffer_.data(), bufferSize_);
+    float frequency = 0.0f;
+    
+    if (!multiplePitches.empty())
+    {
+        // Use lowest detected pitch for bass
+        frequency = findLowestPitch(multiplePitches);
+    }
+    else
+    {
+        // Fall back to YIN for monophonic detection
+        std::vector<float> windowedBuffer(bufferSize_);
+        for (int i = 0; i < bufferSize_; ++i)
+        {
+            windowedBuffer[i] = analysisBuffer_[i] * window_[i];
+        }
         
-    float frequency = sampleRate_ / refinedPeriod;
+        calculateDifference(windowedBuffer.data(), bufferSize_);
+        calculateCumulativeMeanNormalizedDifference();
+        
+        int periodIndex = getAbsoluteThreshold(0.1f);
+        if (periodIndex != -1)
+        {
+            float refinedPeriod = parabolicInterpolation(periodIndex);
+            if (refinedPeriod > 0.0f)
+            {
+                frequency = sampleRate_ / refinedPeriod;
+            }
+        }
+    }
     
     // Filter out frequencies outside guitar range
     if (frequency < minFreq_ || frequency > maxFreq_)
-        return 0.0f;
+        return lastPitch_;
+    
+    // Apply smoothing to reduce jitter
+    if (frequency > 0.0f)
+    {
+        if (lastPitch_ > 0.0f)
+        {
+            lastPitch_ = lastPitch_ * pitchSmoothing_ + frequency * (1.0f - pitchSmoothing_);
+        }
+        else
+        {
+            lastPitch_ = frequency;
+        }
+    }
         
-    return frequency;
+    return lastPitch_;
 }
 
 void YINPitchDetector::calculateDifference(const float* audioBuffer, int numSamples)
@@ -104,6 +153,106 @@ float YINPitchDetector::parabolicInterpolation(int peakIndex)
     float x0 = (y3 - y1) / (2.0f * (2.0f * y2 - y1 - y3));
     
     return static_cast<float>(peakIndex) + x0;
+}
+
+void YINPitchDetector::processOverlappingWindow(const float* input, int numSamples)
+{
+    for (int i = 0; i < numSamples; ++i)
+    {
+        analysisBuffer_[writeIndex_] = input[i];
+        writeIndex_++;
+        
+        // Check if we have a full buffer for analysis
+        if (writeIndex_ >= hopSize_)
+        {
+            bufferReady_ = true;
+            writeIndex_ = 0;
+            
+            // Shift buffer for overlap
+            std::memmove(analysisBuffer_.data(), 
+                        analysisBuffer_.data() + hopSize_, 
+                        (bufferSize_ - hopSize_) * sizeof(float));
+            writeIndex_ = bufferSize_ - hopSize_;
+        }
+    }
+}
+
+void YINPitchDetector::generateWindow()
+{
+    // Generate Hann window for smooth overlapping
+    for (int i = 0; i < bufferSize_; ++i)
+    {
+        float x = static_cast<float>(i) / (bufferSize_ - 1);
+        window_[i] = 0.5f * (1.0f - std::cos(2.0f * M_PI * x));
+    }
+}
+
+std::vector<float> YINPitchDetector::detectMultiplePitches(const float* buffer, int numSamples)
+{
+    int fftSize = 1 << fftOrder_;
+    
+    // Copy input to FFT buffer (with zero padding if needed)
+    std::fill(fftBuffer_.begin(), fftBuffer_.end(), 0.0f);
+    int copySize = std::min(numSamples, fftSize);
+    
+    for (int i = 0; i < copySize; ++i)
+    {
+        fftBuffer_[i * 2] = buffer[i] * window_[i]; // Real part
+        fftBuffer_[i * 2 + 1] = 0.0f; // Imaginary part
+    }
+    
+    // Perform FFT
+    fft_->performFrequencyOnlyForwardTransform(fftBuffer_.data());
+    
+    // Calculate magnitude spectrum
+    for (int i = 0; i < fftSize / 2; ++i)
+    {
+        float real = fftBuffer_[i * 2];
+        float imag = fftBuffer_[i * 2 + 1];
+        spectrum_[i] = std::sqrt(real * real + imag * imag);
+    }
+    
+    // Find spectral peaks that correspond to musical pitches
+    return findSpectralPeaks(spectrum_);
+}
+
+std::vector<float> YINPitchDetector::findSpectralPeaks(const std::vector<float>& spectrum)
+{
+    std::vector<float> pitches;
+    int fftSize = 1 << fftOrder_;
+    float binWidth = sampleRate_ / fftSize;
+    
+    // Find peaks in the spectrum
+    for (int i = 2; i < static_cast<int>(spectrum.size()) - 2; ++i)
+    {
+        float frequency = i * binWidth;
+        
+        // Only consider frequencies in guitar range
+        if (frequency < minFreq_ || frequency > maxFreq_)
+            continue;
+            
+        // Check if this is a local maximum
+        if (spectrum[i] > spectrum[i-1] && spectrum[i] > spectrum[i+1] &&
+            spectrum[i] > spectrum[i-2] && spectrum[i] > spectrum[i+2])
+        {
+            // Require minimum amplitude threshold
+            float maxSpectrum = *std::max_element(spectrum.begin(), spectrum.end());
+            if (spectrum[i] > maxSpectrum * 0.1f) // 10% of max
+            {
+                pitches.push_back(frequency);
+            }
+        }
+    }
+    
+    return pitches;
+}
+
+float YINPitchDetector::findLowestPitch(const std::vector<float>& pitches)
+{
+    if (pitches.empty())
+        return 0.0f;
+        
+    return *std::min_element(pitches.begin(), pitches.end());
 }
 
 //==============================================================================

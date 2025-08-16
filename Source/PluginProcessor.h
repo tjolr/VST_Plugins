@@ -66,13 +66,37 @@ private:
     void calculateCumulativeMeanNormalizedDifference();
     int getAbsoluteThreshold(float threshold = 0.1f);
     float parabolicInterpolation(int peakIndex);
+    void processOverlappingWindow(const float* input, int numSamples);
+    void generateWindow();
+    
+    // Polyphonic detection methods
+    std::vector<float> detectMultiplePitches(const float* buffer, int numSamples);
+    std::vector<float> findSpectralPeaks(const std::vector<float>& spectrum);
+    float findLowestPitch(const std::vector<float>& pitches);
     
     std::vector<float> differenceBuffer_;
     std::vector<float> cumulativeBuffer_;
     int bufferSize_;
     float sampleRate_;
+    
+    // Overlapping window analysis
+    std::vector<float> analysisBuffer_;
+    std::vector<float> window_;
+    int writeIndex_ = 0;
+    int hopSize_;
+    bool bufferReady_ = false;
+    float lastPitch_ = 0.0f;
+    float pitchSmoothing_ = 0.7f;
+    
+    // FFT for polyphonic analysis
+    std::unique_ptr<juce::dsp::FFT> fft_;
+    std::vector<float> fftBuffer_;
+    std::vector<float> spectrum_;
+    static constexpr int fftOrder_ = 10; // 1024 point FFT
+    
     static constexpr float minFreq_ = 80.0f;  // Low E string
     static constexpr float maxFreq_ = 400.0f; // Upper guitar range
+    static constexpr float overlapRatio_ = 0.75f; // 75% overlap for smooth tracking
 };
 
 //==============================================================================
