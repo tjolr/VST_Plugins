@@ -78,6 +78,18 @@ GuitarToBassAudioProcessorEditor::GuitarToBassAudioProcessorEditor (GuitarToBass
     inputTestButton.setColour(juce::ToggleButton::tickColourId, juce::Colours::red);
     addAndMakeVisible(inputTestButton);
     
+    // Add button listener to test UI interaction
+    inputTestButton.onClick = [this]() {
+        debugLogEditor("=== TEST INPUT BUTTON CLICKED! ===");
+        debugLogEditor("UI interaction is working - looking for audio engine controls...");
+        
+        // Show a popup to confirm the button click
+        juce::AlertWindow::showMessageBoxAsync(juce::MessageBoxIconType::InfoIcon,
+                                              "Button Test",
+                                              "Test Input button was clicked!\n\nNow look for the 'Options' button to start the audio engine.",
+                                              "OK");
+    };
+    
     // Set up level meter labels with enhanced styling
     inputMeterLabel.setText("INPUT LEVEL", juce::dontSendNotification);
     inputMeterLabel.setFont(juce::FontOptions(14.0f, juce::Font::bold));

@@ -24,7 +24,9 @@ juce_add_plugin(GuitarToBassPlugin
     PLUGIN_MANUFACTURER_CODE GtBs
     PLUGIN_CODE GtBs
     FORMATS AU VST3 Standalone
-    PRODUCT_NAME "Guitar to Bass")
+    PRODUCT_NAME "Guitar to Bass"
+    MICROPHONE_PERMISSION_ENABLED TRUE
+    MICROPHONE_PERMISSION_TEXT "This app needs microphone access to process guitar input for bass synthesis.")
 
 # Add source files
 target_sources(GuitarToBassPlugin

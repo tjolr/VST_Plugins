@@ -113,7 +113,7 @@ float YINPitchDetector::detectPitch(const float* audioBuffer, int numSamples)
         calculateDifference(windowedBuffer.data(), bufferSize_);
         calculateCumulativeMeanNormalizedDifference();
         
-        int periodIndex = getAbsoluteThreshold(0.1f);
+        int periodIndex = getAbsoluteThreshold(0.15f); // Increased threshold for better sensitivity
         if (periodIndex != -1)
         {
             float refinedPeriod = parabolicInterpolation(periodIndex);
@@ -529,6 +529,7 @@ GuitarToBassAudioProcessor::GuitarToBassAudioProcessor()
              ", SynthMode: " + juce::String(synthModeParam_ ? "OK" : "NULL"));
     
     debugLog("GuitarToBassAudioProcessor initialization complete");
+    debugLog("=== PLUGIN LOADED - LOOKING FOR AUDIO ENGINE START ===");
 }
 
 GuitarToBassAudioProcessor::~GuitarToBassAudioProcessor()
@@ -655,9 +656,9 @@ void GuitarToBassAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
 
     // Debug: Log buffer info periodically
     static int processCounter = 0;
-    if (++processCounter % 1000 == 0) // Log every 1000th process block
+    if (++processCounter % 100 == 0) // Log every 100th process block (more frequent)
     {
-        debugLog("ProcessBlock - InputChannels: " + juce::String(totalNumInputChannels) + 
+        debugLog("ProcessBlock #" + juce::String(processCounter) + " - InputChannels: " + juce::String(totalNumInputChannels) + 
                  ", OutputChannels: " + juce::String(totalNumOutputChannels) + 
                  ", NumSamples: " + juce::String(buffer.getNumSamples()) + 
                  ", SampleRate: " + juce::String(getSampleRate()));
@@ -671,7 +672,12 @@ void GuitarToBassAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
     bool inputTestEnabled = inputTestParam_ ? inputTestParam_->load() > 0.5f : false;
     if (inputTestEnabled)
     {
-        debugLog("Input test mode enabled - generating test tone");
+        debugLog("=== INPUT TEST ENABLED - GENERATING 330Hz TONE ===");
+        debugLog("Audio devices selected - checking if audio engine is running...");
+        debugLog("Sample Rate: " + juce::String(getSampleRate()) + " Hz");
+        debugLog("Block Size: " + juce::String(getBlockSize()) + " samples");
+        debugLog("Input Channels: " + juce::String(totalNumInputChannels));
+        debugLog("Output Channels: " + juce::String(totalNumOutputChannels));
         static float testPhase = 0.0f;
         float testFreq = 330.0f; // E4 note (within guitar range 80-400 Hz)
         float testIncrement = testFreq / getSampleRate();
@@ -702,13 +708,21 @@ void GuitarToBassAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
             return;
         }
         
+        // Apply input gain to boost quiet signals
+        const float inputGain = 10.0f; // Boost by 20dB (10x)
+        std::vector<float> boostedInput(static_cast<size_t>(numSamples));
+        for (int i = 0; i < numSamples; ++i)
+        {
+            boostedInput[static_cast<size_t>(i)] = inputData[i] * inputGain;
+        }
+        
         // Calculate input level (RMS) and check for audio activity
         float inputRMS = 0.0f;
         float maxInputSample = 0.0f;
         for (int i = 0; i < numSamples; ++i)
         {
-            inputRMS += inputData[i] * inputData[i];
-            maxInputSample = std::max(maxInputSample, std::abs(inputData[i]));
+            inputRMS += boostedInput[static_cast<size_t>(i)] * boostedInput[static_cast<size_t>(i)];
+            maxInputSample = std::max(maxInputSample, std::abs(boostedInput[static_cast<size_t>(i)]));
         }
         inputRMS = std::sqrt(inputRMS / numSamples);
         inputLevel_.store(inputRMS);
@@ -718,11 +732,16 @@ void GuitarToBassAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         {
             debugLog("Input levels - RMS: " + juce::String(inputRMS, 6) + 
                      ", MaxSample: " + juce::String(maxInputSample, 6) + 
-                     ", HasAudio: " + juce::String(inputRMS > 0.001f ? "YES" : "NO"));
+                     ", HasAudio: " + juce::String(inputRMS > 0.0001f ? "YES" : "NO") + // Lowered threshold
+                     ", dB: " + juce::String(20.0f * std::log10(inputRMS + 1e-10f), 1));
         }
         
         // Detect pitch using YIN algorithm
-        float detectedPitch = pitchDetector_->detectPitch(inputData, numSamples);
+        if (processCounter % 1000 == 0)
+        {
+            debugLog("Calling pitch detection with input RMS: " + juce::String(inputRMS, 6));
+        }
+        float detectedPitch = pitchDetector_->detectPitch(boostedInput.data(), numSamples);
         
         // Update current pitch (with basic smoothing)
         if (detectedPitch > 0.0f)
