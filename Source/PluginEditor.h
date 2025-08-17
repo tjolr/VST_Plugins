@@ -38,8 +38,8 @@ private:
     // UI Components
     juce::Slider octaveSlider;
     juce::Label octaveLabel;
-    juce::ToggleButton synthModeToggle;
-    juce::Label synthModeLabel;
+    juce::ComboBox instrumentModeCombo;
+    juce::Label instrumentModeLabel;
     juce::Label titleLabel;
     juce::Label pitchDisplayLabel;
     juce::Label debugLogLabel;
@@ -66,7 +66,7 @@ private:
     
     // Parameter attachments
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> octaveAttachment;
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> synthModeAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> instrumentModeAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> inputTestAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> gateThresholdAttachment;
     

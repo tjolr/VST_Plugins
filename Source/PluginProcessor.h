@@ -14,27 +14,35 @@
 #include <string>
 
 //==============================================================================
-// Bass Synthesizer for generating bass tones
-class BassSynthesizer
+// Instrument modes
+enum class InstrumentMode
+{
+    AnalogBass = 0,
+    SynthBass = 1,
+    Piano = 2
+};
+
+class MultiInstrumentSynthesizer
 {
 public:
-    BassSynthesizer(float sampleRate);
+    MultiInstrumentSynthesizer(float sampleRate);
     
     void setFrequency(float frequency);
     void setAmplitude(float amplitude);
-    void setSynthMode(bool synthMode); // true = synth, false = analog
+    void setInstrumentMode(InstrumentMode mode);
     void renderBlock(float* output, int numSamples);
     void reset();
     
 private:
     void generateWavetable();
     void generateAnalogWave();
+    void generatePianoWavetable();
     float getNextSample();
     
     [[maybe_unused]] float sampleRate_;
     float frequency_ = 440.0f;
     float amplitude_ = 0.5f;
-    bool synthMode_ = true;
+    InstrumentMode instrumentMode_ = InstrumentMode::SynthBass;
     
     // Wavetable synthesis
     std::vector<float> wavetable_;
@@ -261,11 +269,14 @@ public:
     ChordRootDetector::ChordInfo getCurrentChord() const;
     BassNoteMapper::BassNote getCurrentBassNote() const;
     std::vector<NoteDetector::Note> getDetectedNotes() const;
+    
+    // MIDI output functionality
+    void generateMidiOutput(juce::MidiBuffer& midiBuffer, int numSamples);
 
 private:
     //==============================================================================
     std::unique_ptr<YINPitchDetector> pitchDetector_;
-    std::unique_ptr<BassSynthesizer> bassSynthesizer_;
+    std::unique_ptr<MultiInstrumentSynthesizer> instrumentSynthesizer_;
     std::unique_ptr<ChordRootDetector> chordDetector_;
     std::unique_ptr<BassNoteMapper> bassMapper_;
     float currentPitch_ = 0.0f;
@@ -296,11 +307,16 @@ private:
     // Parameter management
     juce::AudioProcessorValueTreeState parameters_;
     std::atomic<float>* octaveShiftParam_ = nullptr;
-    std::atomic<float>* synthModeParam_ = nullptr;
+    std::atomic<float>* instrumentModeParam_ = nullptr;
     std::atomic<float>* inputTestParam_ = nullptr;
     std::atomic<float>* gateThresholdParam_ = nullptr;
     
     juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
+    
+    // MIDI output state
+    int currentMidiNote_ = -1;  // Currently playing MIDI note (-1 = no note)
+    bool midiNoteOn_ = false;   // Whether a MIDI note is currently on
+    float midiNoteVelocity_ = 0.0f; // Current note velocity (0-127)
     
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (GuitarToBassAudioProcessor)
 };

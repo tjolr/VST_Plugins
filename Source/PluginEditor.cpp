@@ -97,17 +97,21 @@ GuitarToBassAudioProcessorEditor::GuitarToBassAudioProcessorEditor (GuitarToBass
     octaveLabel.attachToComponent(&octaveSlider, true);
     addAndMakeVisible(octaveLabel);
     
-    // Set up synth mode toggle
-    synthModeToggle.setButtonText("Synth");
-    synthModeToggle.setColour(juce::ToggleButton::textColourId, juce::Colours::white);
-    synthModeToggle.setColour(juce::ToggleButton::tickColourId, juce::Colours::green);
-    addAndMakeVisible(synthModeToggle);
+    // Set up instrument mode combo box
+    instrumentModeCombo.addItem("Analog Bass", 1);
+    instrumentModeCombo.addItem("Synth Bass", 2);
+    instrumentModeCombo.addItem("Piano", 3);
+    instrumentModeCombo.setSelectedItemIndex(1); // Default to Synth Bass
+    instrumentModeCombo.setColour(juce::ComboBox::backgroundColourId, juce::Colours::darkgrey);
+    instrumentModeCombo.setColour(juce::ComboBox::textColourId, juce::Colours::white);
+    instrumentModeCombo.setColour(juce::ComboBox::arrowColourId, juce::Colours::white);
+    addAndMakeVisible(instrumentModeCombo);
     
-    synthModeLabel.setText("Bass Mode", juce::dontSendNotification);
-    synthModeLabel.setFont(juce::FontOptions(14.0f));
-    synthModeLabel.setColour(juce::Label::textColourId, juce::Colours::white);
-    synthModeLabel.attachToComponent(&synthModeToggle, true);
-    addAndMakeVisible(synthModeLabel);
+    instrumentModeLabel.setText("Instrument", juce::dontSendNotification);
+    instrumentModeLabel.setFont(juce::FontOptions(14.0f));
+    instrumentModeLabel.setColour(juce::Label::textColourId, juce::Colours::white);
+    instrumentModeLabel.attachToComponent(&instrumentModeCombo, true);
+    addAndMakeVisible(instrumentModeLabel);
     
     // Set up input test button
     inputTestButton.setButtonText("Test Input");
@@ -217,7 +221,7 @@ GuitarToBassAudioProcessorEditor::GuitarToBassAudioProcessorEditor (GuitarToBass
     // Create parameter attachments
     auto& params = audioProcessor.getParameters();
     octaveAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(params, "octaveShift", octaveSlider);
-    synthModeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(params, "synthMode", synthModeToggle);
+    instrumentModeAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment>(params, "instrumentMode", instrumentModeCombo);
     inputTestAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment>(params, "inputTest", inputTestButton);
     gateThresholdAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment>(params, "gateThreshold", gateThresholdSlider);
     
@@ -301,10 +305,10 @@ void GuitarToBassAudioProcessorEditor::resized()
     octaveSlider.setBounds(octaveArea);
     bounds.removeFromTop(20); // Increased from 15 to 20
     
-    // Synth mode toggle
-    auto synthArea = bounds.removeFromTop(30);
-    synthArea.removeFromLeft(100); // Space for label
-    synthModeToggle.setBounds(synthArea.removeFromLeft(80));
+    // Instrument mode combo box
+    auto instrumentArea = bounds.removeFromTop(30);
+    instrumentArea.removeFromLeft(100); // Space for label
+    instrumentModeCombo.setBounds(instrumentArea);
     bounds.removeFromTop(20); // Increased from 15 to 20
     
     // Gate threshold slider

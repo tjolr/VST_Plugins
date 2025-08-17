@@ -517,17 +517,17 @@ bool YINPitchDetector::validatePitchCandidate(float frequency, float confidence)
 }
 
 //==============================================================================
-// Bass Synthesizer Implementation
-BassSynthesizer::BassSynthesizer(float sampleRate)
+// Multi-Instrument Synthesizer Implementation
+MultiInstrumentSynthesizer::MultiInstrumentSynthesizer(float sampleRate)
     : sampleRate_(sampleRate)
 {
-    debugLog("BassSynthesizer created with sample rate: " + juce::String(sampleRate));
+    debugLog("MultiInstrumentSynthesizer created with sample rate: " + juce::String(sampleRate));
     wavetable_.resize(wavetableSize_);
     generateWavetable();
-    debugLog("BassSynthesizer initialization complete");
+    debugLog("MultiInstrumentSynthesizer initialization complete");
 }
 
-void BassSynthesizer::setFrequency(float frequency)
+void MultiInstrumentSynthesizer::setFrequency(float frequency)
 {
     frequency_ = frequency;
     phaseIncrement_ = frequency_ / sampleRate_;
@@ -543,24 +543,32 @@ void BassSynthesizer::setFrequency(float frequency)
     }
 }
 
-void BassSynthesizer::setAmplitude(float amplitude)
+void MultiInstrumentSynthesizer::setAmplitude(float amplitude)
 {
     amplitude_ = juce::jlimit(0.0f, 1.0f, amplitude);
 }
 
-void BassSynthesizer::setSynthMode(bool synthMode)
+void MultiInstrumentSynthesizer::setInstrumentMode(InstrumentMode mode)
 {
-    if (synthMode_ != synthMode)
+    if (instrumentMode_ != mode)
     {
-        synthMode_ = synthMode;
-        if (synthMode_)
+        instrumentMode_ = mode;
+        switch (instrumentMode_)
         {
-            generateWavetable();
+            case InstrumentMode::SynthBass:
+                generateWavetable();
+                break;
+            case InstrumentMode::Piano:
+                generatePianoWavetable();
+                break;
+            case InstrumentMode::AnalogBass:
+            default:
+                break;
         }
     }
 }
 
-void BassSynthesizer::renderBlock(float* output, int numSamples)
+void MultiInstrumentSynthesizer::renderBlock(float* output, int numSamples)
 {
     // Debug: Check output buffer
     if (output == nullptr)
@@ -573,10 +581,10 @@ void BassSynthesizer::renderBlock(float* output, int numSamples)
     static int synthCounter = 0;
     if (++synthCounter % 10000 == 0) // Log every 10000th call
     {
-        debugLog("BassSynthesizer - Frequency: " + juce::String(frequency_, 1) + 
+        debugLog("MultiInstrumentSynthesizer - Frequency: " + juce::String(frequency_, 1) + 
                  ", Amplitude: " + juce::String(amplitude_, 3) + 
                  ", Envelope: " + juce::String(envelope_, 3) + 
-                 ", SynthMode: " + juce::String(synthMode_ ? "Wavetable" : "Analog"));
+                 ", Mode: " + juce::String(static_cast<int>(instrumentMode_)));
     }
     
     // If amplitude is 0, output silence
@@ -601,13 +609,13 @@ void BassSynthesizer::renderBlock(float* output, int numSamples)
         output[i] = sample * envelope_ * amplitude_;
         
         // Advance phase
-        if (synthMode_)
+        if (instrumentMode_ == InstrumentMode::SynthBass || instrumentMode_ == InstrumentMode::Piano)
         {
             phase_ += phaseIncrement_;
             if (phase_ >= 1.0f)
                 phase_ -= 1.0f;
         }
-        else
+        else // AnalogBass
         {
             analogPhase_ += static_cast<float>(phaseIncrement_ * 2.0f * M_PI);
             if (analogPhase_ >= 2.0f * M_PI)
@@ -616,7 +624,7 @@ void BassSynthesizer::renderBlock(float* output, int numSamples)
     }
 }
 
-void BassSynthesizer::reset()
+void MultiInstrumentSynthesizer::reset()
 {
     phase_ = 0.0f;
     analogPhase_ = 0.0f;
@@ -624,7 +632,7 @@ void BassSynthesizer::reset()
     lowPassState_ = 0.0f;
 }
 
-void BassSynthesizer::generateWavetable()
+void MultiInstrumentSynthesizer::generateWavetable()
 {
     // Generate a bass-rich wavetable with fundamental + harmonics
     for (int i = 0; i < wavetableSize_; ++i)
@@ -642,27 +650,60 @@ void BassSynthesizer::generateWavetable()
     }
 }
 
-float BassSynthesizer::getNextSample()
+void MultiInstrumentSynthesizer::generatePianoWavetable()
 {
-    if (synthMode_)
+    // Generate a piano-like wavetable with more complex harmonics
+    for (int i = 0; i < wavetableSize_; ++i)
     {
-        // Wavetable synthesis with linear interpolation
-        float floatIndex = phase_ * wavetableSize_;
-        int index1 = static_cast<int>(floatIndex);
-        int index2 = (index1 + 1) % wavetableSize_;
-        float frac = floatIndex - index1;
+        float x = static_cast<float>(i) / wavetableSize_;
+        float angle = static_cast<float>(2.0f * M_PI * x);
         
-        return wavetable_[static_cast<size_t>(index1)] * (1.0f - frac) + wavetable_[static_cast<size_t>(index2)] * frac;
+        // Piano-like harmonic series with overtones
+        float sample = 0.8f * std::sin(angle)                      // Fundamental
+                     + 0.4f * std::sin(2.0f * angle)               // 2nd harmonic
+                     + 0.2f * std::sin(3.0f * angle)               // 3rd harmonic
+                     + 0.15f * std::sin(4.0f * angle)              // 4th harmonic
+                     + 0.1f * std::sin(5.0f * angle)               // 5th harmonic
+                     + 0.05f * std::sin(6.0f * angle)              // 6th harmonic
+                     + 0.03f * std::sin(8.0f * angle);             // 8th harmonic
+        
+        wavetable_[static_cast<size_t>(i)] = sample * 0.4f; // Scale down for piano
     }
-    else
+}
+
+void MultiInstrumentSynthesizer::generateAnalogWave()
+{
+    // This method can be used for setting up analog-style parameters
+    // For now, analog synthesis is handled directly in getNextSample()
+    filterCutoff_ = 0.3f; // Reset filter cutoff for analog bass
+}
+
+float MultiInstrumentSynthesizer::getNextSample()
+{
+    switch (instrumentMode_)
     {
-        // Analog-style synthesis: sawtooth + lowpass filter
-        float sawtooth = static_cast<float>(analogPhase_ / M_PI) - 1.0f; // -1 to 1 sawtooth
-        
-        // Simple one-pole lowpass filter
-        lowPassState_ += (sawtooth - lowPassState_) * filterCutoff_;
-        
-        return lowPassState_ * 0.5f;
+        case InstrumentMode::SynthBass:
+        case InstrumentMode::Piano:
+        {
+            // Wavetable synthesis with linear interpolation
+            float floatIndex = phase_ * wavetableSize_;
+            int index1 = static_cast<int>(floatIndex);
+            int index2 = (index1 + 1) % wavetableSize_;
+            float frac = floatIndex - index1;
+            
+            return wavetable_[static_cast<size_t>(index1)] * (1.0f - frac) + wavetable_[static_cast<size_t>(index2)] * frac;
+        }
+        case InstrumentMode::AnalogBass:
+        default:
+        {
+            // Analog-style synthesis: sawtooth + lowpass filter
+            float sawtooth = static_cast<float>(analogPhase_ / M_PI) - 1.0f; // -1 to 1 sawtooth
+            
+            // Simple one-pole lowpass filter
+            lowPassState_ += (sawtooth - lowPassState_) * filterCutoff_;
+            
+            return lowPassState_ * 0.5f;
+        }
     }
 }
 
@@ -1014,14 +1055,12 @@ juce::AudioProcessorValueTreeState::ParameterLayout GuitarToBassAudioProcessor::
         juce::AudioParameterFloatAttributes().withLabel("octaves").withStringFromValueFunction(
             [](float value, int) { return juce::String(static_cast<int>(value)) + " oct"; })));
     
-    // Synth mode parameter (0 = analog, 1 = synth)
-    parameters.push_back(std::make_unique<juce::AudioParameterBool>(
-        juce::ParameterID { "synthMode", 1 },
-        "Bass Mode",
-        true,
-        juce::AudioParameterBoolAttributes().withStringFromValueFunction(
-            [](bool value, int) { return value ? "Synth" : "Analog"; })));
-    
+    // Instrument mode parameter (0 = analog bass, 1 = synth bass, 2 = piano)
+    parameters.push_back(std::make_unique<juce::AudioParameterChoice>(
+        juce::ParameterID { "instrumentMode", 1 },
+        "Instrument",
+        juce::StringArray { "Analog Bass", "Synth Bass", "Piano" },
+        1)); // Default to Synth Bass    
     // Input test parameter
     parameters.push_back(std::make_unique<juce::AudioParameterBool>(
         juce::ParameterID { "inputTest", 1 },
@@ -1058,12 +1097,12 @@ GuitarToBassAudioProcessor::GuitarToBassAudioProcessor()
     
     // Get parameter pointers for real-time access
     octaveShiftParam_ = parameters_.getRawParameterValue("octaveShift");
-    synthModeParam_ = parameters_.getRawParameterValue("synthMode");
+    instrumentModeParam_ = parameters_.getRawParameterValue("instrumentMode");
     inputTestParam_ = parameters_.getRawParameterValue("inputTest");
     gateThresholdParam_ = parameters_.getRawParameterValue("gateThreshold");
     
     debugLog("Parameter pointers obtained - OctaveShift: " + juce::String(octaveShiftParam_ ? "OK" : "NULL") + 
-             ", SynthMode: " + juce::String(synthModeParam_ ? "OK" : "NULL"));
+             ", InstrumentMode: " + juce::String(instrumentModeParam_ ? "OK" : "NULL"));
     
     // Debug: Check audio bus configuration
     debugLog("Audio Bus Configuration:");
@@ -1161,9 +1200,9 @@ void GuitarToBassAudioProcessor::prepareToPlay (double sampleRate, int samplesPe
     
     pitchDetector_ = std::make_unique<YINPitchDetector>(pitchAnalysisSize, sampleRate);
     
-    // Initialize bass synthesizer
-    debugLog("Initializing bass synthesizer");
-    bassSynthesizer_ = std::make_unique<BassSynthesizer>(sampleRate);
+    // Initialize multi-instrument synthesizer
+    debugLog("Initializing multi-instrument synthesizer");
+    instrumentSynthesizer_ = std::make_unique<MultiInstrumentSynthesizer>(sampleRate);
     
     // Initialize chord detector with 100ms stability delay
     debugLog("Initializing chord root detector");
@@ -1213,7 +1252,7 @@ bool GuitarToBassAudioProcessor::isBusesLayoutSupported (const BusesLayout& layo
 }
 #endif
 
-void GuitarToBassAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, [[maybe_unused]] juce::MidiBuffer& midiMessages)
+void GuitarToBassAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer& midiMessages)
 {
     juce::ScopedNoDenormals noDenormals;
     auto totalNumInputChannels  = getTotalNumInputChannels();
@@ -1273,8 +1312,8 @@ void GuitarToBassAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         }
     }
     
-    // Perform pitch detection and bass synthesis
-    if (totalNumInputChannels > 0 && pitchDetector_ && bassSynthesizer_)
+    // Perform pitch detection and synthesis
+    if (totalNumInputChannels > 0 && pitchDetector_ && instrumentSynthesizer_)
     {
         auto* inputData = buffer.getReadPointer(0);
         int numSamples = buffer.getNumSamples();
@@ -1379,8 +1418,8 @@ void GuitarToBassAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         {
             // No significant input - clear pitch and output
             currentPitch_ = 0.0f;
-            bassSynthesizer_->setAmplitude(0.0f);
-            bassSynthesizer_->reset();
+            instrumentSynthesizer_->setAmplitude(0.0f);
+            instrumentSynthesizer_->reset();
             
             // Debug: Log when input is too quiet
             if (processCounter % 1000 == 0) // Less frequent for quiet periods
@@ -1496,7 +1535,7 @@ void GuitarToBassAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         float finalTargetPitch = currentPitch_ / std::pow(2.0f, octaveShift);
         
         // Check synth mode
-        bool synthMode = synthModeParam_ ? synthModeParam_->load() > 0.5f : true;
+        InstrumentMode instrumentMode = static_cast<InstrumentMode>(instrumentModeParam_ ? static_cast<int>(instrumentModeParam_->load()) : 1);
         
         // Debug: Log synthesis parameters periodically
         if (processCounter % 100 == 0) // More frequent logging
@@ -1505,12 +1544,12 @@ void GuitarToBassAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
             debugLog("Final Target Pitch: " + juce::String(finalTargetPitch, 1) + " Hz");
             debugLog("Current Pitch: " + juce::String(currentPitch_, 1) + " Hz");
             debugLog("Octave Shift: " + juce::String(octaveShift, 1) + " octaves");
-            debugLog("Synth Mode: " + juce::String(synthMode ? "Synth" : "Analog"));
+            debugLog("Instrument Mode: " + juce::String(static_cast<int>(instrumentMode)));
             debugLog("Input Source: " + juce::String(inputTestEnabled ? "Test Tone" : "Live Audio"));
         }
         
-        // Configure bass synthesizer
-        bassSynthesizer_->setFrequency(finalTargetPitch);
+        // Configure synthesizer
+        instrumentSynthesizer_->setFrequency(finalTargetPitch);
         
         // Only produce output if we have detected pitch and input audio
         bool hasInputAudio = boostedInputRMS > 0.001f;
@@ -1518,21 +1557,21 @@ void GuitarToBassAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         
         if (hasInputAudio && hasValidPitch)
         {
-            bassSynthesizer_->setAmplitude(0.3f);
+            instrumentSynthesizer_->setAmplitude(0.3f);
         }
         else
         {
             // No output when no input or no pitch detected
-            bassSynthesizer_->setAmplitude(0.0f);
+            instrumentSynthesizer_->setAmplitude(0.0f);
             
             // Reset synthesizer when no input to ensure clean state
             if (!hasInputAudio)
             {
-                bassSynthesizer_->reset();
+                instrumentSynthesizer_->reset();
             }
         }
         
-        bassSynthesizer_->setSynthMode(synthMode);
+        instrumentSynthesizer_->setInstrumentMode(instrumentMode);
         
         // Generate bass output
         for (int channel = 0; channel < totalNumOutputChannels; ++channel)
@@ -1543,7 +1582,7 @@ void GuitarToBassAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
                 debugLog("ERROR: Output data pointer is null for channel " + juce::String(channel));
                 continue;
             }
-            bassSynthesizer_->renderBlock(outputData, numSamples);
+            instrumentSynthesizer_->renderBlock(outputData, numSamples);
         }
         
         // Calculate output level (RMS) from first output channel
@@ -1582,9 +1621,12 @@ void GuitarToBassAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         {
             debugLog("Processing skipped - InputChannels: " + juce::String(totalNumInputChannels) + 
                      ", PitchDetector: " + juce::String(pitchDetector_ ? "OK" : "NULL") + 
-                     ", BassSynthesizer: " + juce::String(bassSynthesizer_ ? "OK" : "NULL"));
+                     ", InstrumentSynthesizer: " + juce::String(instrumentSynthesizer_ ? "OK" : "NULL"));
         }
     }
+    
+    // Generate MIDI output when in piano mode
+    generateMidiOutput(midiMessages, buffer.getNumSamples());
 }
 
 //==============================================================================
@@ -1615,6 +1657,81 @@ void GuitarToBassAudioProcessor::setStateInformation (const void* data, int size
         {
             parameters_.replaceState(juce::ValueTree::fromXml(*xmlState));
         }
+    }
+}
+
+//==============================================================================
+// MIDI output functionality
+void GuitarToBassAudioProcessor::generateMidiOutput(juce::MidiBuffer& midiBuffer, [[maybe_unused]] int numSamples)
+{
+    // Only generate MIDI when in piano mode
+    InstrumentMode instrumentMode = static_cast<InstrumentMode>(instrumentModeParam_ ? static_cast<int>(instrumentModeParam_->load()) : 1);
+    if (instrumentMode != InstrumentMode::Piano)
+    {
+        // If not in piano mode and we have a note on, turn it off
+        if (midiNoteOn_)
+        {
+            auto noteOffMessage = juce::MidiMessage::noteOff(1, currentMidiNote_);
+            midiBuffer.addEvent(noteOffMessage, 0);
+            midiNoteOn_ = false;
+            currentMidiNote_ = -1;
+        }
+        return;
+    }
+    
+    // Determine target MIDI note based on detected pitch
+    int targetMidiNote = -1;
+    float noteVelocity = 0.0f;
+    
+    // Use chord root if available and stable, otherwise use current pitch
+    if (currentChord_.isValid() && currentChord_.isStable)
+    {
+        targetMidiNote = currentChord_.rootNote.midiNote;
+        noteVelocity = std::min(127.0f, currentChord_.confidence * 100.0f + 60.0f); // Scale confidence to velocity
+    }
+    else if (currentPitch_ > 0.0f)
+    {
+        targetMidiNote = NoteDetector::frequencyToMidiNote(currentPitch_);
+        noteVelocity = 80.0f; // Default velocity
+    }
+    
+    // Check if we need to change the current MIDI note
+    bool shouldPlayNote = (targetMidiNote >= 0) && (getInputLevel() > 0.001f); // Only play if we have audio input
+    
+    if (shouldPlayNote && targetMidiNote != currentMidiNote_)
+    {
+        // Turn off the current note if one is playing
+        if (midiNoteOn_)
+        {
+            auto noteOffMessage = juce::MidiMessage::noteOff(1, currentMidiNote_);
+            midiBuffer.addEvent(noteOffMessage, 0);
+        }
+        
+        // Turn on the new note
+        currentMidiNote_ = targetMidiNote;
+        midiNoteVelocity_ = noteVelocity;
+        auto noteOnMessage = juce::MidiMessage::noteOn(1, currentMidiNote_, static_cast<juce::uint8>(midiNoteVelocity_));
+        midiBuffer.addEvent(noteOnMessage, 0);
+        midiNoteOn_ = true;
+        
+        // Debug log MIDI events
+        static int midiCounter = 0;
+        if (++midiCounter % 10 == 0) // Log every 10th MIDI event
+        {
+            std::string noteName = NoteDetector::midiNoteToNoteName(currentMidiNote_);
+            debugLog("MIDI Note On: " + juce::String(noteName) + " (MIDI " + juce::String(currentMidiNote_) + 
+                     "), Velocity: " + juce::String(static_cast<int>(midiNoteVelocity_)));
+        }
+    }
+    else if (!shouldPlayNote && midiNoteOn_)
+    {
+        // Turn off the current note if we should stop playing
+        auto noteOffMessage = juce::MidiMessage::noteOff(1, currentMidiNote_);
+        midiBuffer.addEvent(noteOffMessage, 0);
+        midiNoteOn_ = false;
+        currentMidiNote_ = -1;
+        
+        debugLog("MIDI Note Off");
     }
 }
 
