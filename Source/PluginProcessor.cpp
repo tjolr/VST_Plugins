@@ -1216,6 +1216,9 @@ void GuitarToBassAudioProcessor::prepareToPlay (double sampleRate, int samplesPe
     inputBuffer_.setSize(1, samplesPerBlock);
     outputBuffer_.setSize(1, samplesPerBlock);
     
+    // Reset note stability system
+    resetNoteStability();
+    
     debugLog("Audio engine initialization complete");
     debugLog("=== READY FOR AUDIO PROCESSING ===");
 }
@@ -1433,14 +1436,15 @@ void GuitarToBassAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         // Perform polyphonic pitch detection using YIN for multiple notes
         std::vector<float> detectedPitches;
         float primaryPitch = 0.0f;
+        float primaryConfidence = 0.0f;
         
         if (pitchDetector_)
         {
             // Get multiple pitches from polyphonic detection
             detectedPitches = pitchDetector_->detectMultiplePitches(gatedInput.data(), numSamples);
             
-            // Also get primary pitch from traditional YIN
-            primaryPitch = pitchDetector_->detectPitch(gatedInput.data(), numSamples);
+            // Also get primary pitch from traditional YIN with confidence
+            primaryPitch = pitchDetector_->detectPitchWithConfidence(gatedInput.data(), numSamples, primaryConfidence);
             
             // If polyphonic detection found pitches but YIN didn't, add the lowest polyphonic pitch
             if (detectedPitches.empty() && primaryPitch > 0.0f)
@@ -1457,7 +1461,42 @@ void GuitarToBassAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
             {
                 detectedPitches.push_back(simplePitch);
                 primaryPitch = simplePitch;
+                primaryConfidence = 0.6f; // Assign moderate confidence for simple detection
             }
+        }
+        
+        // Enhanced pitch analysis with harmonic detection
+        float bestPitch = primaryPitch;
+        float bestConfidence = primaryConfidence;
+        
+        // If we have multiple detected pitches, analyze harmonics to find best fundamental
+        if (detectedPitches.size() > 1)
+        {
+            HarmonicInfo harmonicInfo = analyzeHarmonics(detectedPitches);
+            if (harmonicInfo.confidence > bestConfidence && harmonicInfo.fundamental > 0.0f)
+            {
+                bestPitch = harmonicInfo.fundamental;
+                bestConfidence = harmonicInfo.confidence;
+                lastHarmonicAnalysis_ = harmonicInfo;
+                
+                if (processCounter % 100 == 0)
+                {
+                    debugLog("=== HARMONIC ANALYSIS ===");
+                    debugLog("Best Fundamental: " + juce::String(bestPitch, 1) + " Hz");
+                    debugLog("Harmonic Confidence: " + juce::String(bestConfidence, 3));
+                    debugLog("Total Pitches Detected: " + juce::String(static_cast<int>(detectedPitches.size())));
+                }
+            }
+        }
+        
+        // Update note stability with the best detected pitch
+        if (bestPitch > 0.0f)
+        {
+            updateNoteStability(bestPitch, bestConfidence);
+        }
+        else
+        {
+            updateNoteStability(0.0f, 0.0f); // Signal no detection
         }
         
         // Update note-based detection system
@@ -1524,10 +1563,37 @@ void GuitarToBassAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
                          (!detectedPitches.empty() ? detectedPitches[0] : 0.0f);
         }
         
-        // Update current pitch (with basic smoothing)
-        if (targetPitch > 0.0f)
+        // Use stable note frequency as the target pitch for synthesis
+        if (stableNote_ != -1 && stableNoteFrequency_ > 0.0f)
         {
-            currentPitch_ = currentPitch_ * 0.8f + targetPitch * 0.2f;
+            // Use the stable note frequency - much smoother than raw detection
+            currentPitch_ = stableNoteFrequency_;
+            targetPitch = stableNoteFrequency_;
+            
+            if (processCounter % 100 == 0)
+            {
+                std::string stableNoteName = NoteDetector::midiNoteToNoteName(stableNote_);
+                debugLog("=== STABLE NOTE LOCKED ===");
+                debugLog("Stable Note: " + juce::String(stableNoteName) + " (MIDI " + juce::String(stableNote_) + ")");
+                debugLog("Stable Frequency: " + juce::String(stableNoteFrequency_, 1) + " Hz");
+                debugLog("Confirmation Count: " + juce::String(stableNoteConfirmationCount_));
+                debugLog("Note Hold Count: " + juce::String(noteHoldCount_));
+                debugLog("Candidate Count: " + juce::String(static_cast<int>(noteCandidates_.size())));
+            }
+        }
+        else if (targetPitch > 0.0f)
+        {
+            // Fall back to basic smoothing when no stable note
+            currentPitch_ = currentPitch_ * 0.9f + targetPitch * 0.1f; // Even more smoothing
+        }
+        else
+        {
+            // Gradually fade out current pitch when no detection
+            currentPitch_ = currentPitch_ * 0.95f;
+            if (currentPitch_ < 10.0f) // Below this threshold, consider it silent
+            {
+                currentPitch_ = 0.0f;
+            }
         }
         
         // Apply octave shifting to the final target frequency
@@ -1661,6 +1727,269 @@ void GuitarToBassAudioProcessor::setStateInformation (const void* data, int size
 }
 
 //==============================================================================
+// Note stability methods
+void GuitarToBassAudioProcessor::updateNoteStability(float detectedFrequency, float confidence)
+{
+    if (detectedFrequency <= 0.0f || confidence < confidenceThreshold_)
+    {
+        // Use note holding instead of immediate reset
+        if (stableNote_ != -1)
+        {
+            noteHoldCount_++;
+            if (noteHoldCount_ > maxNoteHoldCount_)
+            {
+                // Gradually fade out the stable note
+                stableNoteConfirmationCount_ = std::max(0, stableNoteConfirmationCount_ - 2);
+                if (stableNoteConfirmationCount_ <= 0)
+                {
+                    stableNote_ = -1;
+                    stableNoteFrequency_ = 0.0f;
+                    noteHoldCount_ = 0;
+                }
+            }
+        }
+        return;
+    }
+    
+    // Reset hold count since we have a valid detection
+    noteHoldCount_ = 0;
+    
+    // Quantize to nearest MIDI note
+    int detectedMidiNote = quantizeFrequencyToMidiNote(detectedFrequency);
+    
+    // Check if this matches our current stable note (with hysteresis)
+    if (stableNote_ != -1 && isFrequencyCloseToNote(detectedFrequency, stableNote_))
+    {
+        // Reinforce current stable note more aggressively
+        stableNoteConfirmationCount_ = std::min(stableNoteConfirmationCount_ + 2, minConfirmationCount_ + 10);
+        
+        // Update average frequency with stronger bias toward detected frequency
+        float alpha = 0.15f; // Increased smoothing factor for better tracking
+        stableNoteFrequency_ = stableNoteFrequency_ * (1.0f - alpha) + detectedFrequency * alpha;
+        
+        return;
+    }
+    
+    // Check if we need to switch to a new note
+    if (detectedMidiNote != stableNote_)
+    {
+        // Look for this note in candidates
+        bool foundCandidate = false;
+        for (auto& candidate : noteCandidates_)
+        {
+            if (candidate.midiNote == detectedMidiNote && 
+                isFrequencyCloseToNote(detectedFrequency, candidate.midiNote))
+            {
+                // Update existing candidate more aggressively
+                candidate.consecutiveCount += (confidence > 0.6f) ? 2 : 1; // Boost for high confidence
+                candidate.confidence = std::max(candidate.confidence, confidence);
+                
+                // Update average frequency with adaptive smoothing
+                float alpha = 0.25f + (confidence * 0.25f); // Higher confidence = more aggressive tracking
+                candidate.averageFrequency = candidate.averageFrequency * (1.0f - alpha) + detectedFrequency * alpha;
+                
+                // Check if this candidate is stable enough
+                if (candidate.consecutiveCount >= minConfirmationCount_)
+                {
+                    // Apply hysteresis - require higher confidence to switch from current stable note
+                    bool shouldSwitch = true;
+                    if (stableNote_ != -1)
+                    {
+                        float switchThreshold = noteHysteresis_ * stableNoteConfirmationCount_;
+                        shouldSwitch = (candidate.consecutiveCount > switchThreshold) || (confidence > 0.7f);
+                    }
+                    
+                    if (shouldSwitch)
+                    {
+                        stableNote_ = candidate.midiNote;
+                        stableNoteFrequency_ = candidate.averageFrequency;
+                        stableNoteConfirmationCount_ = candidate.consecutiveCount;
+                        
+                        // Clear other candidates
+                        noteCandidates_.clear();
+                    }
+                }
+                
+                foundCandidate = true;
+                break;
+            }
+        }
+        
+        if (!foundCandidate)
+        {
+            // Add new candidate
+            NoteCandidate newCandidate;
+            newCandidate.midiNote = detectedMidiNote;
+            newCandidate.frequency = detectedFrequency;
+            newCandidate.confidence = confidence;
+            newCandidate.consecutiveCount = 1;
+            newCandidate.averageFrequency = detectedFrequency;
+            
+            noteCandidates_.push_back(newCandidate);
+            
+            // Limit number of candidates
+            if (noteCandidates_.size() > 5)
+            {
+                noteCandidates_.erase(noteCandidates_.begin());
+            }
+        }
+        
+        // Decay other candidates
+        for (auto it = noteCandidates_.begin(); it != noteCandidates_.end();)
+        {
+            if (it->midiNote != detectedMidiNote)
+            {
+                it->consecutiveCount = std::max(0, it->consecutiveCount - 1);
+                if (it->consecutiveCount == 0)
+                {
+                    it = noteCandidates_.erase(it);
+                }
+                else
+                {
+                    ++it;
+                }
+            }
+            else
+            {
+                ++it;
+            }
+        }
+    }
+}
+
+int GuitarToBassAudioProcessor::quantizeFrequencyToMidiNote(float frequency)
+{
+    if (frequency <= 0.0f) return -1;
+    
+    // Convert to MIDI note and round to nearest semitone
+    float midiNoteFloat = 69.0f + 12.0f * std::log2(frequency / 440.0f);
+    return static_cast<int>(std::round(midiNoteFloat));
+}
+
+bool GuitarToBassAudioProcessor::isFrequencyCloseToNote(float frequency, int midiNote, float tolerance)
+{
+    if (frequency <= 0.0f || midiNote < 0) return false;
+    
+    float targetFrequency = NoteDetector::midiNoteToFrequency(midiNote);
+    return std::abs(frequency - targetFrequency) <= tolerance;
+}
+
+void GuitarToBassAudioProcessor::resetNoteStability()
+{
+    noteCandidates_.clear();
+    stableNote_ = -1;
+    stableNoteFrequency_ = 0.0f;
+    stableNoteConfirmationCount_ = 0;
+    noteHoldCount_ = 0;
+    lastHarmonicAnalysis_ = HarmonicInfo();
+}
+
+GuitarToBassAudioProcessor::HarmonicInfo GuitarToBassAudioProcessor::analyzeHarmonics(const std::vector<float>& detectedPitches)
+{
+    HarmonicInfo harmonicInfo;
+    
+    if (detectedPitches.empty())
+    {
+        return harmonicInfo;
+    }
+    
+    // Find the best fundamental frequency candidate
+    float bestFundamental = findBestFundamental(detectedPitches);
+    if (bestFundamental > 0.0f)
+    {
+        harmonicInfo.fundamental = bestFundamental;
+        harmonicInfo.confidence = calculateHarmonicConfidence(bestFundamental, detectedPitches);
+        harmonicInfo.harmonics = detectedPitches;
+    }
+    
+    return harmonicInfo;
+}
+
+float GuitarToBassAudioProcessor::findBestFundamental(const std::vector<float>& frequencies)
+{
+    if (frequencies.empty()) return 0.0f;
+    
+    // Try each frequency as a potential fundamental
+    float bestFundamental = 0.0f;
+    float bestScore = 0.0f;
+    
+    for (float fundamental : frequencies)
+    {
+        if (fundamental < 70.0f || fundamental > 500.0f) continue; // Guitar range
+        
+        float score = 0.0f;
+        int harmonicCount = 0;
+        
+        // Check how many detected frequencies are harmonics of this fundamental
+        for (float freq : frequencies)
+        {
+            for (int harmonic = 1; harmonic <= 6; ++harmonic)
+            {
+                float expectedHarmonic = fundamental * harmonic;
+                float tolerance = expectedHarmonic * 0.05f; // 5% tolerance
+                
+                if (std::abs(freq - expectedHarmonic) <= tolerance)
+                {
+                    score += 1.0f / harmonic; // Lower harmonics get higher weight
+                    harmonicCount++;
+                    break;
+                }
+            }
+        }
+        
+        // Bonus for having multiple harmonics
+        if (harmonicCount > 1)
+        {
+            score *= (1.0f + harmonicCount * 0.2f);
+        }
+        
+        if (score > bestScore)
+        {
+            bestScore = score;
+            bestFundamental = fundamental;
+        }
+    }
+    
+    return bestFundamental;
+}
+
+float GuitarToBassAudioProcessor::calculateHarmonicConfidence(float fundamental, const std::vector<float>& frequencies)
+{
+    if (fundamental <= 0.0f || frequencies.empty()) return 0.0f;
+    
+    int harmonicsFound = 0;
+    float totalStrength = 0.0f;
+    
+    // Check for harmonics up to the 4th
+    for (int harmonic = 1; harmonic <= 4; ++harmonic)
+    {
+        float expectedFreq = fundamental * harmonic;
+        float tolerance = expectedFreq * 0.04f; // 4% tolerance
+        
+        for (float freq : frequencies)
+        {
+            if (std::abs(freq - expectedFreq) <= tolerance)
+            {
+                harmonicsFound++;
+                totalStrength += 1.0f / harmonic; // Weight by harmonic order
+                break;
+            }
+        }
+    }
+    
+    // Confidence based on number of harmonics found and their strength
+    float confidence = (totalStrength * harmonicsFound) / 4.0f; // Normalize to 0-1 range
+    return std::min(1.0f, confidence);
+}
+
+void GuitarToBassAudioProcessor::updateNoteWithHysteresis(float newFrequency, float confidence)
+{
+    // This method can be used for additional hysteresis logic if needed
+    // For now, the hysteresis is handled in updateNoteStability
+    updateNoteStability(newFrequency, confidence);
+}
+
+//==============================================================================
 // MIDI output functionality
 void GuitarToBassAudioProcessor::generateMidiOutput(juce::MidiBuffer& midiBuffer, [[maybe_unused]] int numSamples)
 {
@@ -1679,12 +2008,17 @@ void GuitarToBassAudioProcessor::generateMidiOutput(juce::MidiBuffer& midiBuffer
         return;
     }
     
-    // Determine target MIDI note based on detected pitch
+    // Determine target MIDI note based on stable note detection
     int targetMidiNote = -1;
     float noteVelocity = 0.0f;
     
-    // Use chord root if available and stable, otherwise use current pitch
-    if (currentChord_.isValid() && currentChord_.isStable)
+    // Prioritize stable note over chord detection for MIDI output
+    if (stableNote_ != -1 && stableNoteFrequency_ > 0.0f)
+    {
+        targetMidiNote = stableNote_;
+        noteVelocity = std::min(127.0f, 90.0f + (stableNoteConfirmationCount_ * 3.0f)); // Higher velocity for stable notes
+    }
+    else if (currentChord_.isValid() && currentChord_.isStable)
     {
         targetMidiNote = currentChord_.rootNote.midiNote;
         noteVelocity = std::min(127.0f, currentChord_.confidence * 100.0f + 60.0f); // Scale confidence to velocity
@@ -1692,7 +2026,7 @@ void GuitarToBassAudioProcessor::generateMidiOutput(juce::MidiBuffer& midiBuffer
     else if (currentPitch_ > 0.0f)
     {
         targetMidiNote = NoteDetector::frequencyToMidiNote(currentPitch_);
-        noteVelocity = 80.0f; // Default velocity
+        noteVelocity = 70.0f; // Lower velocity for unstable detection
     }
     
     // Check if we need to change the current MIDI note

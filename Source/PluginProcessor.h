@@ -70,6 +70,7 @@ public:
     YINPitchDetector(int bufferSize, float sampleRate);
     float detectPitch(const float* audioBuffer, int numSamples);
     std::vector<float> detectMultiplePitches(const float* buffer, int numSamples);
+    float detectPitchWithConfidence(const float* audioBuffer, int numSamples, float& confidence);
     
 private:
     void calculateDifference(const float* audioBuffer, int numSamples);
@@ -80,7 +81,6 @@ private:
     // Enhanced detection methods
     float calculatePitchConfidence(int periodIndex);
     std::vector<float> preprocessAudio(const float* input, int numSamples);
-    float detectPitchWithConfidence(const float* audioBuffer, int numSamples, float& confidence);
     bool validatePitchCandidate(float frequency, float confidence);
     void processOverlappingWindow(const float* input, int numSamples);
     void generateWindow();
@@ -272,6 +272,25 @@ public:
     
     // MIDI output functionality
     void generateMidiOutput(juce::MidiBuffer& midiBuffer, int numSamples);
+    
+    // Harmonic analysis structure
+    struct HarmonicInfo {
+        float fundamental = 0.0f;
+        float confidence = 0.0f;
+        std::vector<float> harmonics;
+    };
+    
+    // Note stability methods
+    void updateNoteStability(float detectedFrequency, float confidence);
+    int quantizeFrequencyToMidiNote(float frequency);
+    bool isFrequencyCloseToNote(float frequency, int midiNote, float tolerance = 15.0f);
+    void resetNoteStability();
+    
+    // Enhanced harmonic analysis
+    HarmonicInfo analyzeHarmonics(const std::vector<float>& detectedPitches);
+    float findBestFundamental(const std::vector<float>& frequencies);
+    float calculateHarmonicConfidence(float fundamental, const std::vector<float>& frequencies);
+    void updateNoteWithHysteresis(float newFrequency, float confidence);
 
 private:
     //==============================================================================
@@ -317,6 +336,31 @@ private:
     int currentMidiNote_ = -1;  // Currently playing MIDI note (-1 = no note)
     bool midiNoteOn_ = false;   // Whether a MIDI note is currently on
     float midiNoteVelocity_ = 0.0f; // Current note velocity (0-127)
+    
+    // Note stability and smoothing
+    struct NoteCandidate {
+        int midiNote = -1;
+        float frequency = 0.0f;
+        float confidence = 0.0f;
+        int consecutiveCount = 0;
+        float averageFrequency = 0.0f;
+    };
+    
+    std::vector<NoteCandidate> noteCandidates_;
+    int stableNote_ = -1;  // Currently stable note (-1 = no stable note)
+    float stableNoteFrequency_ = 0.0f;
+    int stableNoteConfirmationCount_ = 0;
+    static constexpr int minConfirmationCount_ = 5;  // Reduced from 8 to 5 for faster lock-on
+    static constexpr float maxFrequencyDeviation_ = 15.0f; // Increased from 10 to 15 Hz tolerance
+    static constexpr float confidenceThreshold_ = 0.3f; // Reduced from 0.5 to 0.3 for more sensitivity
+    
+    // Enhanced stability features
+    int noteHoldCount_ = 0;  // How long to hold a note after detection stops
+    static constexpr int maxNoteHoldCount_ = 20; // Hold note for 20 processing cycles
+    float noteHysteresis_ = 0.8f; // Hysteresis factor for note switching
+    
+    // Harmonic analysis for better fundamental detection
+    HarmonicInfo lastHarmonicAnalysis_;
     
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (GuitarToBassAudioProcessor)
 };
