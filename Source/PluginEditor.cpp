@@ -44,6 +44,43 @@ GuitarToBassAudioProcessorEditor::GuitarToBassAudioProcessorEditor (GuitarToBass
     debugLogLabel.setTooltip("Debug information - Check console for detailed logs");
     addAndMakeVisible(debugLogLabel);
     
+    // Set up note detection display components
+    inputNotesLabel.setText("Input Notes:", juce::dontSendNotification);
+    inputNotesLabel.setFont(juce::FontOptions(12.0f, juce::Font::bold));
+    inputNotesLabel.setColour(juce::Label::textColourId, juce::Colours::lightcyan);
+    inputNotesLabel.setJustificationType(juce::Justification::centredLeft);
+    addAndMakeVisible(inputNotesLabel);
+    
+    inputNotesDisplayLabel.setText("--", juce::dontSendNotification);
+    inputNotesDisplayLabel.setFont(juce::FontOptions(12.0f));
+    inputNotesDisplayLabel.setColour(juce::Label::textColourId, juce::Colours::white);
+    inputNotesDisplayLabel.setJustificationType(juce::Justification::centredLeft);
+    addAndMakeVisible(inputNotesDisplayLabel);
+    
+    chordRootLabel.setText("Chord Root:", juce::dontSendNotification);
+    chordRootLabel.setFont(juce::FontOptions(12.0f, juce::Font::bold));
+    chordRootLabel.setColour(juce::Label::textColourId, juce::Colours::lightgreen);
+    chordRootLabel.setJustificationType(juce::Justification::centredLeft);
+    addAndMakeVisible(chordRootLabel);
+    
+    chordRootDisplayLabel.setText("--", juce::dontSendNotification);
+    chordRootDisplayLabel.setFont(juce::FontOptions(12.0f));
+    chordRootDisplayLabel.setColour(juce::Label::textColourId, juce::Colours::white);
+    chordRootDisplayLabel.setJustificationType(juce::Justification::centredLeft);
+    addAndMakeVisible(chordRootDisplayLabel);
+    
+    bassNoteLabel.setText("Bass Note:", juce::dontSendNotification);
+    bassNoteLabel.setFont(juce::FontOptions(12.0f, juce::Font::bold));
+    bassNoteLabel.setColour(juce::Label::textColourId, juce::Colours::orange);
+    bassNoteLabel.setJustificationType(juce::Justification::centredLeft);
+    addAndMakeVisible(bassNoteLabel);
+    
+    bassNoteDisplayLabel.setText("--", juce::dontSendNotification);
+    bassNoteDisplayLabel.setFont(juce::FontOptions(12.0f));
+    bassNoteDisplayLabel.setColour(juce::Label::textColourId, juce::Colours::white);
+    bassNoteDisplayLabel.setJustificationType(juce::Justification::centredLeft);
+    addAndMakeVisible(bassNoteDisplayLabel);
+    
     // Add mouse listener to debug label
     debugLogLabel.addMouseListener(this, false);
     
@@ -192,7 +229,7 @@ GuitarToBassAudioProcessorEditor::GuitarToBassAudioProcessorEditor (GuitarToBass
     
     debugLogEditor("Editor setup complete");
     
-    setSize (600, 520); // Increased height from 420 to 520 for better spacing
+    setSize (600, 650); // Increased height to accommodate note detection displays
 }
 
 GuitarToBassAudioProcessorEditor::~GuitarToBassAudioProcessorEditor()
@@ -234,7 +271,29 @@ void GuitarToBassAudioProcessorEditor::resized()
     
     // Debug log display
     debugLogLabel.setBounds(bounds.removeFromTop(30));
-    bounds.removeFromTop(20); // Increased from 15 to 20
+    bounds.removeFromTop(15);
+    
+    // Note detection displays
+    auto noteDetectionArea = bounds.removeFromTop(90); // Space for 3 rows of note info
+    
+    // Input Notes row
+    auto inputNotesRow = noteDetectionArea.removeFromTop(25);
+    inputNotesLabel.setBounds(inputNotesRow.removeFromLeft(100));
+    inputNotesDisplayLabel.setBounds(inputNotesRow);
+    noteDetectionArea.removeFromTop(5); // Small gap
+    
+    // Chord Root row
+    auto chordRootRow = noteDetectionArea.removeFromTop(25);
+    chordRootLabel.setBounds(chordRootRow.removeFromLeft(100));
+    chordRootDisplayLabel.setBounds(chordRootRow);
+    noteDetectionArea.removeFromTop(5); // Small gap
+    
+    // Bass Note row
+    auto bassNoteRow = noteDetectionArea.removeFromTop(25);
+    bassNoteLabel.setBounds(bassNoteRow.removeFromLeft(100));
+    bassNoteDisplayLabel.setBounds(bassNoteRow);
+    
+    bounds.removeFromTop(20);
     
     // Octave slider
     auto octaveArea = bounds.removeFromTop(30);
@@ -301,6 +360,69 @@ void GuitarToBassAudioProcessorEditor::timerCallback()
     else
     {
         pitchDisplayLabel.setText("Pitch: --", juce::dontSendNotification);
+    }
+    
+    // Update note detection displays
+    auto detectedNotes = audioProcessor.getDetectedNotes();
+    auto currentChord = audioProcessor.getCurrentChord();
+    auto currentBassNote = audioProcessor.getCurrentBassNote();
+    
+    // Update input notes display
+    if (!detectedNotes.empty())
+    {
+        juce::String notesText;
+        for (size_t i = 0; i < std::min<size_t>(detectedNotes.size(), 4); ++i) // Show up to 4 notes
+        {
+            if (i > 0) notesText += ", ";
+            notesText += juce::String(detectedNotes[i].noteName);
+        }
+        if (detectedNotes.size() > 4)
+        {
+            notesText += "...";
+        }
+        inputNotesDisplayLabel.setText(notesText, juce::dontSendNotification);
+    }
+    else
+    {
+        inputNotesDisplayLabel.setText("--", juce::dontSendNotification);
+    }
+    
+    // Update chord root display
+    if (currentChord.isValid())
+    {
+        juce::String chordText = juce::String(currentChord.rootNote.noteName);
+        chordText += " (" + juce::String(currentChord.rootNote.frequency, 1) + " Hz)";
+        if (currentChord.isStable)
+        {
+            chordText += " ✓";
+            chordRootDisplayLabel.setColour(juce::Label::textColourId, juce::Colours::lightgreen);
+        }
+        else
+        {
+            chordText += " ...";
+            chordRootDisplayLabel.setColour(juce::Label::textColourId, juce::Colours::yellow);
+        }
+        chordRootDisplayLabel.setText(chordText, juce::dontSendNotification);
+    }
+    else
+    {
+        chordRootDisplayLabel.setText("--", juce::dontSendNotification);
+        chordRootDisplayLabel.setColour(juce::Label::textColourId, juce::Colours::white);
+    }
+    
+    // Update bass note display
+    if (currentBassNote.isValid())
+    {
+        juce::String bassText = juce::String(currentBassNote.noteName);
+        bassText += " (" + juce::String(currentBassNote.frequency, 1) + " Hz)";
+        bassText += " - " + juce::String(currentBassNote.stringName);
+        bassNoteDisplayLabel.setText(bassText, juce::dontSendNotification);
+        bassNoteDisplayLabel.setColour(juce::Label::textColourId, juce::Colours::orange);
+    }
+    else
+    {
+        bassNoteDisplayLabel.setText("--", juce::dontSendNotification);
+        bassNoteDisplayLabel.setColour(juce::Label::textColourId, juce::Colours::white);
     }
     
     // Update dB labels
@@ -450,7 +572,7 @@ void GuitarToBassAudioProcessorEditor::drawLevelMeter(juce::Graphics& g, const j
         
         // Draw dB label
         juce::String dbText = juce::String(static_cast<int>(db));
-        g.drawText(dbText, bounds.getRight() + 2, static_cast<int>(yPos - 6), 25, 12, juce::Justification::left);
+        g.drawText(dbText, static_cast<int>(bounds.getRight() + 2), static_cast<int>(yPos - 6), 25, 12, juce::Justification::left);
     }
     
     // Border with subtle glow effect

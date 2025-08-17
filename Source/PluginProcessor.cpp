@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <string>
 
 // Debug logging function
 static void debugLog(const juce::String& message)
@@ -89,6 +90,7 @@ float YINPitchDetector::detectPitch(const float* audioBuffer, int numSamples)
     
     auto multiplePitches = detectMultiplePitches(analysisBuffer_.data(), bufferSize_);
     float frequency = 0.0f;
+    float confidence = 0.0f;
     
     if (!multiplePitches.empty())
     {
@@ -113,13 +115,14 @@ float YINPitchDetector::detectPitch(const float* audioBuffer, int numSamples)
         calculateDifference(windowedBuffer.data(), bufferSize_);
         calculateCumulativeMeanNormalizedDifference();
         
-        int periodIndex = getAbsoluteThreshold(0.15f); // Increased threshold for better sensitivity
+        int periodIndex = getAbsoluteThreshold(0.08f); // Lowered threshold for better sensitivity
         if (periodIndex != -1)
         {
             float refinedPeriod = parabolicInterpolation(periodIndex);
             if (refinedPeriod > 0.0f)
             {
                 frequency = sampleRate_ / refinedPeriod;
+                confidence = calculatePitchConfidence(periodIndex);
                 if (debugCounter % 100 == 0)
                     debugLog("YIN detection - PeriodIndex: " + juce::String(periodIndex) + 
                              ", RefinedPeriod: " + juce::String(refinedPeriod, 3) + 
@@ -133,29 +136,56 @@ float YINPitchDetector::detectPitch(const float* audioBuffer, int numSamples)
         }
     }
     
+    // Enhanced pitch validation with confidence
+    
     // Filter out frequencies outside guitar range
     if (frequency < minFreq_ || frequency > maxFreq_)
     {
         if (debugCounter % 100 == 0 && frequency > 0.0f)
             debugLog("Frequency " + juce::String(frequency, 1) + " Hz outside guitar range (" + 
                      juce::String(minFreq_) + "-" + juce::String(maxFreq_) + " Hz)");
+        consecutiveDetections_ = 0;
         return lastPitch_;
     }
     
-    // Apply smoothing to reduce jitter
-    if (frequency > 0.0f)
+    // Validate pitch candidate with confidence
+    if (!validatePitchCandidate(frequency, confidence))
     {
-        if (lastPitch_ > 0.0f)
+        consecutiveDetections_ = 0;
+        return lastPitch_;
+    }
+    
+    // Apply enhanced smoothing with consecutive detection validation
+    if (frequency > 0.0f && confidence > confidenceThreshold_)
+    {
+        consecutiveDetections_++;
+        
+        // Only update pitch if we have enough consecutive detections
+        if (consecutiveDetections_ >= minConsecutiveDetections_)
         {
-            lastPitch_ = lastPitch_ * pitchSmoothing_ + frequency * (1.0f - pitchSmoothing_);
-        }
-        else
-        {
-            lastPitch_ = frequency;
+            if (lastPitch_ > 0.0f)
+            {
+                // Adaptive smoothing based on pitch stability
+                float pitchDifference = std::abs(frequency - lastPitch_) / lastPitch_;
+                float adaptiveSmoothing = pitchDifference > 0.1f ? 0.3f : pitchSmoothing_;
+                lastPitch_ = lastPitch_ * adaptiveSmoothing + frequency * (1.0f - adaptiveSmoothing);
+            }
+            else
+            {
+                lastPitch_ = frequency;
+            }
+            
+            pitchConfidence_ = confidence;
         }
         
         if (debugCounter % 100 == 0)
-            debugLog("Final pitch: " + juce::String(lastPitch_, 1) + " Hz");
+            debugLog("Pitch: " + juce::String(frequency, 1) + " Hz, Confidence: " + 
+                    juce::String(confidence, 3) + ", Consecutive: " + juce::String(consecutiveDetections_) + 
+                    ", Final: " + juce::String(lastPitch_, 1) + " Hz");
+    }
+    else
+    {
+        consecutiveDetections_ = 0;
     }
         
     return lastPitch_;
@@ -300,6 +330,8 @@ std::vector<float> YINPitchDetector::findSpectralPeaks(const std::vector<float>&
     float binWidth = sampleRate_ / fftSize;
     
     // Find peaks in the spectrum
+    std::vector<std::pair<float, float>> peaks; // frequency, amplitude
+    
     for (int i = 2; i < static_cast<int>(spectrum.size()) - 2; ++i)
     {
         float frequency = i * binWidth;
@@ -312,13 +344,50 @@ std::vector<float> YINPitchDetector::findSpectralPeaks(const std::vector<float>&
         if (spectrum[static_cast<size_t>(i)] > spectrum[static_cast<size_t>(i-1)] && spectrum[static_cast<size_t>(i)] > spectrum[static_cast<size_t>(i+1)] &&
             spectrum[static_cast<size_t>(i)] > spectrum[static_cast<size_t>(i-2)] && spectrum[static_cast<size_t>(i)] > spectrum[static_cast<size_t>(i+2)])
         {
-            // Require minimum amplitude threshold
+            // Enhanced amplitude threshold with dynamic adjustment
             float maxSpectrum = *std::max_element(spectrum.begin(), spectrum.end());
-            if (spectrum[static_cast<size_t>(i)] > maxSpectrum * 0.1f) // 10% of max
+            float dynamicThreshold = std::max(0.1f, maxSpectrum * 0.12f); // Adaptive threshold
+            if (spectrum[static_cast<size_t>(i)] > dynamicThreshold)
             {
-                pitches.push_back(frequency);
+                peaks.push_back({frequency, spectrum[static_cast<size_t>(i)]});
             }
         }
+    }
+    
+    // Sort peaks by amplitude (strongest first)
+    std::sort(peaks.begin(), peaks.end(), [](const auto& a, const auto& b) {
+        return a.second > b.second;
+    });
+    
+    // Filter out harmonics - only keep fundamentals
+    for (const auto& peak : peaks)
+    {
+        float frequency = peak.first;
+        bool isHarmonic = false;
+        
+        // Check if this frequency is a harmonic of an already detected fundamental
+        for (float fundamental : pitches)
+        {
+            // Check if frequency is close to 2x, 3x, 4x the fundamental
+            for (int harmonic = 2; harmonic <= 4; ++harmonic)
+            {
+                float harmonicFreq = fundamental * harmonic;
+                if (std::abs(frequency - harmonicFreq) < 10.0f) // Within 10Hz tolerance
+                {
+                    isHarmonic = true;
+                    break;
+                }
+            }
+            if (isHarmonic) break;
+        }
+        
+        if (!isHarmonic)
+        {
+            pitches.push_back(frequency);
+        }
+        
+        // Limit to 3 simultaneous notes maximum for guitar chords
+        if (pitches.size() >= 3) break;
     }
     
     return pitches;
@@ -330,6 +399,121 @@ float YINPitchDetector::findLowestPitch(const std::vector<float>& pitches)
         return 0.0f;
         
     return *std::min_element(pitches.begin(), pitches.end());
+}
+
+float YINPitchDetector::calculatePitchConfidence(int periodIndex)
+{
+    if (periodIndex <= 0 || periodIndex >= static_cast<int>(cumulativeBuffer_.size()))
+        return 0.0f;
+    
+    // Confidence is inversely related to the YIN value at the detected period
+    float yinValue = cumulativeBuffer_[static_cast<size_t>(periodIndex)];
+    
+    // Lower YIN values indicate better periodicity (higher confidence)
+    float confidence = 1.0f - std::min(yinValue, 1.0f);
+    
+    // Boost confidence for very low YIN values
+    if (yinValue < 0.1f)
+        confidence = 0.9f + (0.1f - yinValue) * 10.0f; // Scale from 0.9 to 1.0
+    
+    return juce::jlimit(0.0f, 1.0f, confidence);
+}
+
+std::vector<float> YINPitchDetector::preprocessAudio(const float* input, int numSamples)
+{
+    std::vector<float> processed(static_cast<size_t>(numSamples));
+    
+    // Apply pre-emphasis filter to enhance higher frequencies
+    float preEmphasisCoeff = 0.97f;
+    float prevSample = 0.0f;
+    
+    for (int i = 0; i < numSamples; ++i)
+    {
+        processed[static_cast<size_t>(i)] = input[i] - preEmphasisCoeff * prevSample;
+        prevSample = input[i];
+    }
+    
+    // Apply simple DC removal
+    float dcSum = 0.0f;
+    for (int i = 0; i < numSamples; ++i)
+    {
+        dcSum += processed[static_cast<size_t>(i)];
+    }
+    float dcOffset = dcSum / numSamples;
+    
+    for (int i = 0; i < numSamples; ++i)
+    {
+        processed[static_cast<size_t>(i)] -= dcOffset;
+    }
+    
+    return processed;
+}
+
+float YINPitchDetector::detectPitchWithConfidence(const float* audioBuffer, int numSamples, float& confidence)
+{
+    // Preprocess audio for better pitch detection
+    auto processedAudio = preprocessAudio(audioBuffer, numSamples);
+    
+    // Apply window
+    for (int i = 0; i < numSamples && i < bufferSize_; ++i)
+    {
+        processedAudio[static_cast<size_t>(i)] *= window_[static_cast<size_t>(i)];
+    }
+    
+    // Run YIN algorithm
+    calculateDifference(processedAudio.data(), std::min(numSamples, bufferSize_));
+    calculateCumulativeMeanNormalizedDifference();
+    
+    int periodIndex = getAbsoluteThreshold(0.08f);
+    if (periodIndex == -1)
+    {
+        confidence = 0.0f;
+        return 0.0f;
+    }
+    
+    float refinedPeriod = parabolicInterpolation(periodIndex);
+    if (refinedPeriod <= 0.0f)
+    {
+        confidence = 0.0f;
+        return 0.0f;
+    }
+    
+    float frequency = sampleRate_ / refinedPeriod;
+    confidence = calculatePitchConfidence(periodIndex);
+    
+    return frequency;
+}
+
+bool YINPitchDetector::validatePitchCandidate(float frequency, float confidence)
+{
+    // Check frequency range
+    if (frequency < minFreq_ || frequency > maxFreq_)
+        return false;
+    
+    // Check minimum confidence
+    if (confidence < confidenceThreshold_)
+        return false;
+    
+    // Check for reasonable pitch change if we have a previous pitch
+    if (lastPitch_ > 0.0f)
+    {
+        float pitchRatio = frequency / lastPitch_;
+        
+        // Reject pitches that are too far from the previous pitch (octave jumps are suspicious)
+        if (pitchRatio > 2.1f || pitchRatio < 0.48f) // Allow just over an octave
+        {
+            return false;
+        }
+        
+        // Be more strict about smaller changes to reduce jitter
+        float centDifference = 1200.0f * std::log2(pitchRatio);
+        if (std::abs(centDifference) > 100.0f && confidence < 0.8f) // 100 cents = 1 semitone
+        {
+            return false;
+        }
+    }
+    
+    return true;
 }
 
 //==============================================================================
@@ -483,6 +667,307 @@ float BassSynthesizer::getNextSample()
 }
 
 //==============================================================================
+// Note Detection Implementation
+int NoteDetector::frequencyToMidiNote(float frequency)
+{
+    if (frequency <= 0.0f) return -1;
+    
+    // MIDI note formula: midiNote = 69 + 12 * log2(frequency / 440)
+    // where A4 (440 Hz) = MIDI note 69
+    float midiNote = 69.0f + 12.0f * std::log2(frequency / 440.0f);
+    return static_cast<int>(std::round(midiNote));
+}
+
+float NoteDetector::midiNoteToFrequency(int midiNote)
+{
+    if (midiNote < 0) return 0.0f;
+    
+    // Frequency formula: frequency = 440 * 2^((midiNote - 69) / 12)
+    return 440.0f * std::pow(2.0f, (midiNote - 69) / 12.0f);
+}
+
+std::string NoteDetector::midiNoteToNoteName(int midiNote)
+{
+    if (midiNote < 0) return "---";
+    
+    const std::vector<std::string> noteNames = {
+        "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"
+    };
+    
+    int octave = (midiNote / 12) - 1;
+    int noteIndex = midiNote % 12;
+    
+    return noteNames[static_cast<size_t>(noteIndex)] + std::to_string(octave);
+}
+
+int NoteDetector::noteNameToMidiNote(const std::string& noteName)
+{
+    if (noteName.length() < 2) return -1;
+    
+    const std::vector<std::string> noteNames = {
+        "C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B"
+    };
+    
+    // Extract note name (first 1-2 characters)
+    std::string baseName = noteName.substr(0, noteName.find_first_of("0123456789"));
+    std::string octaveStr = noteName.substr(baseName.length());
+    
+    // Find note index
+    auto it = std::find(noteNames.begin(), noteNames.end(), baseName);
+    if (it == noteNames.end()) return -1;
+    
+    int noteIndex = static_cast<int>(std::distance(noteNames.begin(), it));
+    int octave = std::stoi(octaveStr);
+    
+    return (octave + 1) * 12 + noteIndex;
+}
+
+//==============================================================================
+// Chord Root Detector Implementation
+ChordRootDetector::ChordRootDetector(float sampleRate, float stabilityDelayMs)
+    : sampleRate_(sampleRate)
+{
+    // Calculate stability delay in samples based on typical buffer sizes
+    stabilityDelaySamples_ = static_cast<int>((stabilityDelayMs / 1000.0f) * sampleRate);
+    stabilityBuffer_.resize(stabilityBufferSize_);
+    reset();
+}
+
+ChordRootDetector::ChordInfo ChordRootDetector::analyzeNotes(const std::vector<float>& frequencies)
+{
+    currentSampleCount_++;
+    
+    // Convert frequencies to notes
+    std::vector<NoteDetector::Note> detectedNotes;
+    for (float freq : frequencies)
+    {
+        if (freq > 0.0f)
+        {
+            detectedNotes.emplace_back(freq, 1.0f); // Assume confidence 1.0 for now
+        }
+    }
+    
+    // Create new chord info
+    ChordInfo newChord;
+    newChord.detectedNotes = detectedNotes;
+    
+    if (!detectedNotes.empty())
+    {
+        newChord.rootNote = findChordRoot(detectedNotes);
+        newChord.confidence = 1.0f / detectedNotes.size(); // Simple confidence metric
+    }
+    
+    // Update stability buffer
+    updateStabilityBuffer(newChord);
+    
+    // Check if chord is stable (has been consistent for stability delay period)
+    if (isChordStable(newChord))
+    {
+        newChord.isStable = true;
+        currentChord_ = newChord;
+    }
+    
+    return currentChord_;
+}
+
+NoteDetector::Note ChordRootDetector::findChordRoot(const std::vector<NoteDetector::Note>& notes)
+{
+    if (notes.empty()) return NoteDetector::Note();
+    
+    // Simple root detection: find the lowest note
+    // In future versions, this could be enhanced with chord theory analysis
+    auto lowestNote = *std::min_element(notes.begin(), notes.end(), 
+        [](const NoteDetector::Note& a, const NoteDetector::Note& b) {
+            return a.frequency < b.frequency;
+        });
+    
+    return lowestNote;
+}
+
+bool ChordRootDetector::isChordStable(const ChordInfo& newChord)
+{
+    if (!bufferFull_) return false;
+    
+    // Check if the chord has been consistent across the stability buffer
+    int consistentCount = 0;
+    for (const auto& bufferedChord : stabilityBuffer_)
+    {
+        if (bufferedChord.isValid() && newChord.isValid())
+        {
+            // Consider chords similar if root notes are within threshold
+            float semitoneDiff = std::abs(newChord.rootNote.midiNote - bufferedChord.rootNote.midiNote);
+            if (semitoneDiff <= chordChangeThreshold_)
+            {
+                consistentCount++;
+            }
+        }
+        else if (!bufferedChord.isValid() && !newChord.isValid())
+        {
+            consistentCount++; // Both are silent/invalid
+        }
+    }
+    
+    // Require 80% consistency for stability
+    return consistentCount >= (stabilityBufferSize_ * 0.8f);
+}
+
+void ChordRootDetector::updateStabilityBuffer(const ChordInfo& chord)
+{
+    stabilityBuffer_[static_cast<size_t>(bufferWriteIndex_)] = chord;
+    bufferWriteIndex_ = (bufferWriteIndex_ + 1) % stabilityBufferSize_;
+    
+    if (bufferWriteIndex_ == 0)
+    {
+        bufferFull_ = true;
+    }
+}
+
+void ChordRootDetector::reset()
+{
+    currentChord_ = ChordInfo();
+    pendingChord_ = ChordInfo();
+    currentSampleCount_ = 0;
+    bufferWriteIndex_ = 0;
+    bufferFull_ = false;
+    
+    for (auto& chord : stabilityBuffer_)
+    {
+        chord = ChordInfo();
+    }
+}
+
+//==============================================================================
+// Bass Note Mapper Implementation
+BassNoteMapper::BassNoteMapper()
+{
+    initializeBassTuning();
+}
+
+void BassNoteMapper::initializeBassTuning()
+{
+    // Standard 4-string bass tuning: E1, A1, D2, G2
+    bassTuning_.clear();
+    
+    BassNote e1;
+    e1.midiNote = NoteDetector::noteNameToMidiNote("E1");
+    e1.frequency = NoteDetector::midiNoteToFrequency(e1.midiNote);
+    e1.noteName = "E1";
+    e1.stringName = "E (4th string)";
+    bassTuning_.push_back(e1);
+    
+    BassNote a1;
+    a1.midiNote = NoteDetector::noteNameToMidiNote("A1");
+    a1.frequency = NoteDetector::midiNoteToFrequency(a1.midiNote);
+    a1.noteName = "A1";
+    a1.stringName = "A (3rd string)";
+    bassTuning_.push_back(a1);
+    
+    BassNote d2;
+    d2.midiNote = NoteDetector::noteNameToMidiNote("D2");
+    d2.frequency = NoteDetector::midiNoteToFrequency(d2.midiNote);
+    d2.noteName = "D2";
+    d2.stringName = "D (2nd string)";
+    bassTuning_.push_back(d2);
+    
+    BassNote g2;
+    g2.midiNote = NoteDetector::noteNameToMidiNote("G2");
+    g2.frequency = NoteDetector::midiNoteToFrequency(g2.midiNote);
+    g2.noteName = "G2";
+    g2.stringName = "G (1st string)";
+    bassTuning_.push_back(g2);
+}
+
+BassNoteMapper::BassNote BassNoteMapper::mapToClosestBassNote(int inputMidiNote)
+{
+    if (inputMidiNote < 0 || bassTuning_.empty())
+    {
+        return BassNote(); // Invalid note
+    }
+    
+    int closestIndex = findClosestBassNoteIndex(inputMidiNote);
+    return bassTuning_[static_cast<size_t>(closestIndex)];
+}
+
+BassNoteMapper::BassNote BassNoteMapper::mapToClosestBassNote(float inputFrequency)
+{
+    int midiNote = NoteDetector::frequencyToMidiNote(inputFrequency);
+    return mapToClosestBassNote(midiNote);
+}
+
+BassNoteMapper::BassNote BassNoteMapper::mapChordRootToBass(const NoteDetector::Note& chordRoot)
+{
+    if (chordRoot.midiNote < 0)
+    {
+        return BassNote(); // Invalid chord root
+    }
+    
+    // Transpose the chord root down to bass range by finding the note name 
+    // and mapping it to the appropriate bass octave
+    int noteClass = chordRoot.midiNote % 12; // Get the note class (C=0, C#=1, D=2, etc.)
+    
+    // Map note classes to preferred bass notes
+    // We want to map to the bass strings, prioritizing lower strings for lower notes
+    int targetBassNote = -1;
+    
+    switch (noteClass) {
+        case 0:  // C -> closest is D2 (2 semitones up) or A1 (3 semitones down)
+        case 1:  // C# -> closest is D2 (1 semitone up) 
+        case 2:  // D -> D2 directly
+            targetBassNote = 38; // D2
+            break;
+        case 3:  // D# -> closest is E1 (4 semitones down) or D2 (1 semitone down)  
+        case 4:  // E -> E1 directly (but transpose down octaves)
+            targetBassNote = 28; // E1 
+            break;
+        case 5:  // F -> closest is E1 (1 semitone down)
+        case 6:  // F# -> closest is G2 (1 semitone up) or E1 (2 semitones down)
+        case 7:  // G -> G2 directly
+            targetBassNote = 43; // G2
+            break;
+        case 8:  // G# -> closest is A1 (1 semitone up) or G2 (1 semitone down)
+        case 9:  // A -> A1 directly  
+            targetBassNote = 33; // A1
+            break;
+        case 10: // A# -> closest is A1 (1 semitone down)
+        case 11: // B -> closest is A1 (2 semitones down) 
+            targetBassNote = 33; // A1
+            break;
+    }
+    
+    // Find the bass note that matches our target
+    for (const auto& bassNote : bassTuning_)
+    {
+        if (bassNote.midiNote == targetBassNote)
+        {
+            return bassNote;
+        }
+    }
+    
+    // Fallback to closest bass note if something went wrong
+    return mapToClosestBassNote(chordRoot.midiNote);
+}
+
+int BassNoteMapper::findClosestBassNoteIndex(int midiNote)
+{
+    if (bassTuning_.empty()) return 0;
+    
+    int closestIndex = 0;
+    int minDistance = std::abs(midiNote - bassTuning_[0].midiNote);
+    
+    for (size_t i = 1; i < bassTuning_.size(); ++i)
+    {
+        int distance = std::abs(midiNote - bassTuning_[i].midiNote);
+        if (distance < minDistance)
+        {
+            minDistance = distance;
+            closestIndex = static_cast<int>(i);
+        }
+    }
+    
+    return closestIndex;
+}
+
+//==============================================================================
 // Simple real-time pitch detection using zero-crossing analysis
 float detectPitchSimple(const float* audioBuffer, int numSamples, double sampleRate)
 {
@@ -522,7 +1007,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout GuitarToBassAudioProcessor::
     
     // Octave shift parameter (0 to 4 octaves down)
     parameters.push_back(std::make_unique<juce::AudioParameterFloat>(
-        "octaveShift",
+        juce::ParameterID { "octaveShift", 1 },
         "Octave Shift", 
         juce::NormalisableRange<float>(0.0f, 4.0f, 1.0f), 
         1.0f,
@@ -531,7 +1016,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout GuitarToBassAudioProcessor::
     
     // Synth mode parameter (0 = analog, 1 = synth)
     parameters.push_back(std::make_unique<juce::AudioParameterBool>(
-        "synthMode",
+        juce::ParameterID { "synthMode", 1 },
         "Bass Mode",
         true,
         juce::AudioParameterBoolAttributes().withStringFromValueFunction(
@@ -539,7 +1024,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout GuitarToBassAudioProcessor::
     
     // Input test parameter
     parameters.push_back(std::make_unique<juce::AudioParameterBool>(
-        "inputTest",
+        juce::ParameterID { "inputTest", 1 },
         "Input Test",
         false,
         juce::AudioParameterBoolAttributes().withStringFromValueFunction(
@@ -547,7 +1032,7 @@ juce::AudioProcessorValueTreeState::ParameterLayout GuitarToBassAudioProcessor::
     
     // Add noise gate threshold parameter
     parameters.push_back(std::make_unique<juce::AudioParameterFloat>(
-        "gateThreshold",
+        juce::ParameterID { "gateThreshold", 1 },
         "Gate Threshold", 
         juce::NormalisableRange<float>(-80.0f, -20.0f, 1.0f), -50.0f,
         juce::AudioParameterFloatAttributes().withLabel("dB").withStringFromValueFunction(
@@ -680,6 +1165,14 @@ void GuitarToBassAudioProcessor::prepareToPlay (double sampleRate, int samplesPe
     debugLog("Initializing bass synthesizer");
     bassSynthesizer_ = std::make_unique<BassSynthesizer>(sampleRate);
     
+    // Initialize chord detector with 100ms stability delay
+    debugLog("Initializing chord root detector");
+    chordDetector_ = std::make_unique<ChordRootDetector>(sampleRate, 100.0f);
+    
+    // Initialize bass note mapper
+    debugLog("Initializing bass note mapper");
+    bassMapper_ = std::make_unique<BassNoteMapper>();
+    
     // Initialize audio buffers
     inputBuffer_.setSize(1, samplesPerBlock);
     outputBuffer_.setSize(1, samplesPerBlock);
@@ -765,7 +1258,7 @@ void GuitarToBassAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         debugLog("Output Channels: " + juce::String(totalNumOutputChannels));
         static float testPhase = 0.0f;
         float testFreq = 330.0f; // E4 note (within guitar range 80-400 Hz)
-        float testIncrement = testFreq / getSampleRate();
+        float testIncrement = testFreq / static_cast<float>(getSampleRate());
         
         for (int channel = 0; channel < totalNumInputChannels; ++channel)
         {
@@ -835,8 +1328,8 @@ void GuitarToBassAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         float gateThresholdLinear = std::pow(10.0f, gateThreshold / 20.0f);
         
         // Calculate gate coefficients for attack and release
-        float gateAttackCoeff = gateAttack_ > 0.0f ? std::exp(-1.0f / (getSampleRate() * gateAttack_)) : 0.0f;
-        float gateReleaseCoeff = gateRelease_ > 0.0f ? std::exp(-1.0f / (getSampleRate() * gateRelease_)) : 0.0f;
+        float gateAttackCoeff = gateAttack_ > 0.0f ? static_cast<float>(std::exp(-1.0f / (getSampleRate() * gateAttack_))) : 0.0f;
+        float gateReleaseCoeff = gateRelease_ > 0.0f ? static_cast<float>(std::exp(-1.0f / (getSampleRate() * gateRelease_))) : 0.0f;
         
         // Apply noise gate and gain to input signal
         std::vector<float> gatedInput(static_cast<size_t>(numSamples));
@@ -898,28 +1391,109 @@ void GuitarToBassAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
             return;
         }
         
-        // Perform pitch detection on gated input
-        float detectedPitch = 0.0f;
+        // Perform polyphonic pitch detection using YIN for multiple notes
+        std::vector<float> detectedPitches;
+        float primaryPitch = 0.0f;
+        
         if (pitchDetector_)
         {
-            detectedPitch = pitchDetector_->detectPitch(gatedInput.data(), numSamples);
+            // Get multiple pitches from polyphonic detection
+            detectedPitches = pitchDetector_->detectMultiplePitches(gatedInput.data(), numSamples);
+            
+            // Also get primary pitch from traditional YIN
+            primaryPitch = pitchDetector_->detectPitch(gatedInput.data(), numSamples);
+            
+            // If polyphonic detection found pitches but YIN didn't, add the lowest polyphonic pitch
+            if (detectedPitches.empty() && primaryPitch > 0.0f)
+            {
+                detectedPitches.push_back(primaryPitch);
+            }
         }
         
-        // Fallback to simple pitch detection if YIN fails
-        if (detectedPitch <= 0.0f)
+        // Fallback to simple pitch detection if both methods fail
+        if (detectedPitches.empty() && primaryPitch <= 0.0f)
         {
-            detectedPitch = detectPitchSimple(gatedInput.data(), numSamples, getSampleRate());
+            float simplePitch = detectPitchSimple(gatedInput.data(), numSamples, getSampleRate());
+            if (simplePitch > 0.0f)
+            {
+                detectedPitches.push_back(simplePitch);
+                primaryPitch = simplePitch;
+            }
+        }
+        
+        // Update note-based detection system
+        float targetPitch = 0.0f;
+        if (chordDetector_ && bassMapper_ && !detectedPitches.empty())
+        {
+            // Analyze chord from detected pitches
+            currentChord_ = chordDetector_->analyzeNotes(detectedPitches);
+            
+            // Convert frequencies to notes for visualization
+            currentDetectedNotes_.clear();
+            for (float pitch : detectedPitches)
+            {
+                if (pitch > 0.0f)
+                {
+                    currentDetectedNotes_.emplace_back(pitch, 1.0f);
+                }
+            }
+            
+            // Use chord root detection with stability for bass note mapping
+            if (currentChord_.isValid() && currentChord_.isStable)
+            {
+                currentBassNote_ = bassMapper_->mapChordRootToBass(currentChord_.rootNote);
+                targetPitch = currentBassNote_.frequency;
+                
+                if (processCounter % 100 == 0)
+                {
+                    debugLog("=== NOTE-BASED DETECTION ===");
+                    debugLog("Detected Pitches: " + juce::String(detectedPitches.size()));
+                    for (size_t i = 0; i < std::min<size_t>(detectedPitches.size(), 5); ++i) // Log up to 5 pitches
+                    {
+                        int midiNote = NoteDetector::frequencyToMidiNote(detectedPitches[i]);
+                        std::string noteName = NoteDetector::midiNoteToNoteName(midiNote);
+                        debugLog("  Note " + juce::String(static_cast<int>(i+1)) + ": " + 
+                                juce::String(noteName) + " (" + juce::String(detectedPitches[i], 1) + " Hz)");
+                    }
+                    debugLog("Chord Root: " + juce::String(currentChord_.rootNote.noteName) + 
+                             " (" + juce::String(currentChord_.rootNote.frequency, 1) + " Hz) MIDI: " + 
+                             juce::String(currentChord_.rootNote.midiNote));
+                    debugLog("Note Class: " + juce::String(currentChord_.rootNote.midiNote % 12));
+                    debugLog("Mapped Bass Note: " + juce::String(currentBassNote_.noteName) + 
+                             " (" + juce::String(currentBassNote_.frequency, 1) + " Hz) MIDI: " + 
+                             juce::String(currentBassNote_.midiNote));
+                    debugLog("Bass String: " + juce::String(currentBassNote_.stringName));
+                }
+            }
+            else
+            {
+                // Use primary detected pitch while waiting for chord stability
+                targetPitch = primaryPitch > 0.0f ? primaryPitch : 
+                             (!detectedPitches.empty() ? detectedPitches[0] : 0.0f);
+                
+                if (processCounter % 100 == 0)
+                {
+                    debugLog("Chord not stable yet - using primary pitch: " + 
+                            juce::String(targetPitch, 1) + " Hz");
+                }
+            }
+        }
+        else
+        {
+            // Fall back to primary pitch
+            targetPitch = primaryPitch > 0.0f ? primaryPitch : 
+                         (!detectedPitches.empty() ? detectedPitches[0] : 0.0f);
         }
         
         // Update current pitch (with basic smoothing)
-        if (detectedPitch > 0.0f)
+        if (targetPitch > 0.0f)
         {
-            currentPitch_ = currentPitch_ * 0.8f + detectedPitch * 0.2f;
+            currentPitch_ = currentPitch_ * 0.8f + targetPitch * 0.2f;
         }
         
-        // Apply octave shifting
+        // Apply octave shifting to the final target frequency
         float octaveShift = octaveShiftParam_ ? octaveShiftParam_->load() : 1.0f;
-        float targetPitch = currentPitch_ / std::pow(2.0f, octaveShift);
+        float finalTargetPitch = currentPitch_ / std::pow(2.0f, octaveShift);
         
         // Check synth mode
         bool synthMode = synthModeParam_ ? synthModeParam_->load() > 0.5f : true;
@@ -928,16 +1502,15 @@ void GuitarToBassAudioProcessor::processBlock (juce::AudioBuffer<float>& buffer,
         if (processCounter % 100 == 0) // More frequent logging
         {
             debugLog("=== SYNTHESIS DEBUG ===");
-            debugLog("Detected Pitch: " + juce::String(detectedPitch, 1) + " Hz");
+            debugLog("Final Target Pitch: " + juce::String(finalTargetPitch, 1) + " Hz");
             debugLog("Current Pitch: " + juce::String(currentPitch_, 1) + " Hz");
-            debugLog("Target Pitch: " + juce::String(targetPitch, 1) + " Hz");
             debugLog("Octave Shift: " + juce::String(octaveShift, 1) + " octaves");
             debugLog("Synth Mode: " + juce::String(synthMode ? "Synth" : "Analog"));
             debugLog("Input Source: " + juce::String(inputTestEnabled ? "Test Tone" : "Live Audio"));
         }
         
         // Configure bass synthesizer
-        bassSynthesizer_->setFrequency(targetPitch);
+        bassSynthesizer_->setFrequency(finalTargetPitch);
         
         // Only produce output if we have detected pitch and input audio
         bool hasInputAudio = boostedInputRMS > 0.001f;
@@ -1043,6 +1616,23 @@ void GuitarToBassAudioProcessor::setStateInformation (const void* data, int size
             parameters_.replaceState(juce::ValueTree::fromXml(*xmlState));
         }
     }
+}
+
+//==============================================================================
+// Note-based detection getters
+ChordRootDetector::ChordInfo GuitarToBassAudioProcessor::getCurrentChord() const
+{
+    return currentChord_;
+}
+
+BassNoteMapper::BassNote GuitarToBassAudioProcessor::getCurrentBassNote() const
+{
+    return currentBassNote_;
+}
+
+std::vector<NoteDetector::Note> GuitarToBassAudioProcessor::getDetectedNotes() const
+{
+    return currentDetectedNotes_;
 }
 
 //==============================================================================

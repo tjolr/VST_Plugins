@@ -43,6 +43,14 @@ private:
     juce::Label titleLabel;
     juce::Label pitchDisplayLabel;
     juce::Label debugLogLabel;
+    
+    // Note detection display components
+    juce::Label inputNotesLabel;
+    juce::Label chordRootLabel;
+    juce::Label bassNoteLabel;
+    juce::Label inputNotesDisplayLabel;
+    juce::Label chordRootDisplayLabel;
+    juce::Label bassNoteDisplayLabel;
     juce::ToggleButton inputTestButton;
     juce::TextButton enableLiveInputButton;
     juce::Slider gateThresholdSlider;
